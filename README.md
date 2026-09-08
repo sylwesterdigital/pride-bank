@@ -34,3 +34,5 @@ Backend runtime layout: `/opt/pride-bank` (releases/current), `/etc/pride-bank` 
 The only unavoidable one-time external input is Stripe account credentials (`STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`) and, when an existing shared web server cannot be unambiguously mapped to Pride, the HTTPS site mapping. Everything else is detected/provisioned by the release sequence. The webhook endpoint/signing secret is created automatically when possible.
 
 PostgreSQL administration commands run from `/` and migrations are streamed over stdin, so the `postgres` OS user never needs access to `/opt/pride-bank` or `/var/backups/pride-bank`. The application source remains root-owned and is readable only by the dedicated `pride-bank` service group.
+
+Canonical public origin: `https://mojoworks.xyz/labs/bank`. This follows the supplied Shar deployment convention; nginx bootstrap proves the live mapping before any config change and does not alter the `.click`/`www` aliases.

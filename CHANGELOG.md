@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.6] - 2026-09-09
+
+- Use the canonical `https://mojoworks.xyz/labs/bank` public origin established by the supplied Shar deployment conventions instead of treating `.click`, `.xyz`, `www`, and non-`www` aliases as equally eligible API origins.
+- Nginx discovery still proves the canonical origin with a random live file probe before modifying anything; the preferred URL is a selection constraint, not a blind assumption.
+- Fresh Pride release profiles now import only SSH/deployment credentials from Shar/Rantlist and keep Pride's own public URL/API path instead of inheriting another product's URL.
+- Pass the verified canonical public URL through the watcher-owned Ubuntu bootstrap so multi-alias nginx hosts can deploy without manual selection while retaining fail-closed checks.
+
 ## [0.3.5] - 2026-09-08
 
 - Discover Pride's existing HTTPS nginx mapping from the effective `nginx -T` configuration instead of grepping for a literal webroot path.

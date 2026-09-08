@@ -11,6 +11,7 @@ fail(){ pb_error "$*"; exit 1; }
 for t in rsync ssh mktemp; do command -v "$t" >/dev/null || fail "Missing tool: $t"; done
 REMOTE_TARGET="${TMPDIR_REMOTE:-/tmp}/pride-bank-server-${VERSION}-$$"
 REMOTE_SSH=(ssh -o BatchMode=yes -o ConnectTimeout=15 -p "$PB_REMOTE_PORT" "$PB_REMOTE_USER@$PB_REMOTE_HOST")
+PREFERRED_PUBLIC_URL="${PB_REMOTE_URL:-https://mojoworks.xyz/labs/bank}"
 
 pb_section "Staging Blocks API release on Ubuntu"
 "${REMOTE_SSH[@]}" "rm -rf '$REMOTE_TARGET' && mkdir -p '$REMOTE_TARGET'"
@@ -33,9 +34,9 @@ fi
 run_bootstrap(){
   local cmd
   if [[ -n "$PRIV_PREFIX" ]]; then
-    cmd="sudo -n env PB_VERSION='$VERSION' PB_SOURCE_DIR='$REMOTE_TARGET' PB_PUBLIC_ROOT='$PB_REMOTE_DIR' bash '$REMOTE_TARGET/scripts/bootstrap_ubuntu.sh'"
+    cmd="sudo -n env PB_VERSION='$VERSION' PB_SOURCE_DIR='$REMOTE_TARGET' PB_PUBLIC_ROOT='$PB_REMOTE_DIR' PB_PREFERRED_PUBLIC_URL='$PREFERRED_PUBLIC_URL' bash '$REMOTE_TARGET/scripts/bootstrap_ubuntu.sh'"
   else
-    cmd="env PB_VERSION='$VERSION' PB_SOURCE_DIR='$REMOTE_TARGET' PB_PUBLIC_ROOT='$PB_REMOTE_DIR' bash '$REMOTE_TARGET/scripts/bootstrap_ubuntu.sh'"
+    cmd="env PB_VERSION='$VERSION' PB_SOURCE_DIR='$REMOTE_TARGET' PB_PUBLIC_ROOT='$PB_REMOTE_DIR' PB_PREFERRED_PUBLIC_URL='$PREFERRED_PUBLIC_URL' bash '$REMOTE_TARGET/scripts/bootstrap_ubuntu.sh'"
   fi
   set +e
   BOOT_OUTPUT="$("${REMOTE_SSH[@]}" "$cmd" 2>&1)"

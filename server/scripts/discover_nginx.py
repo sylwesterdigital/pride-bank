@@ -8,7 +8,7 @@ import secrets
 import subprocess
 import sys
 from dataclasses import dataclass
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 @dataclass(frozen=True)
 class Candidate:
@@ -182,9 +182,24 @@ def curl_probe(host: str, url: str, expected: str):
     return False
 
 
+def candidate_base(c: Candidate):
+    return f'https://{c.host}' + ('' if c.base_path == '/' else c.base_path)
+
+
+def normalize_base_url(value: str):
+    parsed=urlsplit(value.strip())
+    if parsed.scheme.lower() != 'https' or not parsed.hostname or parsed.query or parsed.fragment:
+        return None
+    host=parsed.hostname.lower().rstrip('.')
+    port='' if parsed.port in (None,443) else f':{parsed.port}'
+    path=norm_uri(parsed.path or '/')
+    return urlunsplit(('https', host+port, '' if path=='/' else path, '', ''))
+
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('--root', required=True)
+    ap.add_argument('--preferred-base-url')
     args=ap.parse_args()
     public_root=str(pathlib.Path(args.root).resolve())
     index=pathlib.Path(public_root)/'index.html'
@@ -221,15 +236,36 @@ def main():
     finally:
         try: probe_path.unlink()
         except FileNotFoundError: pass
-    # dedupe exact URL mapping; multiple config files for the same live mapping is still ambiguous for editing.
+    # Dedupe exact live mappings. Multiple aliases may legitimately serve the
+    # same Pride tree on a shared nginx host. When the release profile supplies
+    # a preferred canonical URL, it is accepted only if the live random-file
+    # probe proved exactly one matching nginx server block for that exact URL.
+    # This resolves aliases without guessing and without modifying the aliases.
     unique=list(dict.fromkeys(matches))
-    if len(unique)!=1:
-        print(f'ERROR: HTTPS probe matched {len(unique)} nginx mappings; expected exactly one. No nginx files were modified.',file=sys.stderr)
-        for c in unique:
-            print(f'CANDIDATE=https://{c.host}{"" if c.base_path=="/" else c.base_path} SITE={c.site}',file=sys.stderr)
+    c=None
+    preferred=normalize_base_url(args.preferred_base_url) if args.preferred_base_url else None
+    if args.preferred_base_url and not preferred:
+        print('ERROR: --preferred-base-url must be a clean HTTPS origin/path with no query or fragment.',file=sys.stderr)
         return 4
-    c=unique[0]
-    base=f'https://{c.host}' + ('' if c.base_path=='/' else c.base_path)
+    if preferred:
+        preferred_matches=[m for m in unique if normalize_base_url(candidate_base(m)) == preferred]
+        if len(preferred_matches)==1:
+            c=preferred_matches[0]
+            print(f'PROVEN_ALIAS_COUNT={len(unique)}')
+            print('SELECTION=preferred-canonical-url')
+        else:
+            print(f'ERROR: preferred canonical URL {preferred} was proven by {len(preferred_matches)} nginx mappings; expected exactly one. No nginx files were modified.',file=sys.stderr)
+            for m in unique:
+                print(f'CANDIDATE={candidate_base(m)} SITE={m.site}',file=sys.stderr)
+            return 4
+    elif len(unique)==1:
+        c=unique[0]
+    else:
+        print(f'ERROR: HTTPS probe matched {len(unique)} nginx mappings; expected exactly one. No nginx files were modified.',file=sys.stderr)
+        for m in unique:
+            print(f'CANDIDATE={candidate_base(m)} SITE={m.site}',file=sys.stderr)
+        return 4
+    base=candidate_base(c)
     print(f'SITE_FILE={c.site}')
     print(f'SERVER_NAME={c.host}')
     print(f'BASE_PATH={c.base_path}')

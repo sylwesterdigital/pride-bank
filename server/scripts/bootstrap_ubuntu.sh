@@ -8,6 +8,7 @@ unset LANGUAGE LC_CTYPE 2>/dev/null || true
 RELEASE_VERSION="${PB_VERSION:?PB_VERSION missing}"
 SOURCE_DIR="${PB_SOURCE_DIR:?PB_SOURCE_DIR missing}"
 PUBLIC_ROOT="${PB_PUBLIC_ROOT:-/var/www/mojoworks/labs/bank}"
+PREFERRED_PUBLIC_URL="${PB_PREFERRED_PUBLIC_URL:-}"
 APP_ROOT=/opt/pride-bank
 RELEASE_DIR="$APP_ROOT/releases/$RELEASE_VERSION"
 CURRENT_LINK="$APP_ROOT/current"
@@ -265,7 +266,12 @@ is_https_base(){ [[ "$1" =~ ^https://[^/[:space:]]+(/[^[:space:]?#]*)?$ ]]; }
 if ! is_https_base "$PUBLIC_BASE_URL"; then
   if command -v nginx >/dev/null 2>&1; then
     set +e
-    DISCOVERY="$(python3 "$RELEASE_DIR/scripts/discover_nginx.py" --root "$PUBLIC_ROOT" 2>&1)"
+    DISCOVERY_ARGS=(--root "$PUBLIC_ROOT")
+    if is_https_base "$PREFERRED_PUBLIC_URL"; then
+      DISCOVERY_ARGS+=(--preferred-base-url "$PREFERRED_PUBLIC_URL")
+      printf 'Preferred canonical Pride URL: %s\n' "$PREFERRED_PUBLIC_URL"
+    fi
+    DISCOVERY="$(python3 "$RELEASE_DIR/scripts/discover_nginx.py" "${DISCOVERY_ARGS[@]}" 2>&1)"
     DISCOVERY_RC=$?
     set -e
     if (( DISCOVERY_RC == 0 )); then
