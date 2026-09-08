@@ -32,6 +32,8 @@ grep -Fq 'PrideBank.xcodeproj' scripts/build-watch.sh || fail "Watcher release v
 grep -Fq './scripts/deploy.sh' scripts/build-watch.sh || fail "Watcher does not own deployment flow"
 grep -Fq '/var/www/mojoworks/labs/bank' scripts/release_profile.sh || fail "Ubuntu deployment path is not pinned"
 grep -Fq 'StripePaymentSheet' PrideBank.xcodeproj/project.pbxproj || fail "Stripe iOS PaymentSheet package missing"
+grep -Fq 'requirement = { kind = exactVersion; version = 25.17.0; };' PrideBank.xcodeproj/project.pbxproj || fail "Stripe iOS must be pinned exactly to 25.17.0 for the supported Xcode 16.2 toolchain"
+if grep -Eq 'upToNextMajorVersion|upToNextMinorVersion|branch =|revision =' PrideBank.xcodeproj/project.pbxproj; then fail "Stripe iOS dependency must not float to an unverified SDK version"; fi
 grep -Fq 'payment_intent.succeeded' server/src/stripe.js || fail "Stripe webhook settlement missing"
 grep -Fq 'constructEvent' server/src/stripe.js || fail "Stripe webhook signature verification missing"
 grep -Fq 'post_topup_credit' server/migrations/001_core.sql || fail "Atomic top-up ledger posting missing"

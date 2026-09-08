@@ -36,3 +36,7 @@ The only unavoidable one-time external input is Stripe account credentials (`STR
 PostgreSQL administration commands run from `/` and migrations are streamed over stdin, so the `postgres` OS user never needs access to `/opt/pride-bank` or `/var/backups/pride-bank`. The application source remains root-owned and is readable only by the dedicated `pride-bank` service group.
 
 Canonical public origin: `https://mojoworks.xyz/labs/bank`. This follows the supplied Shar deployment convention; nginx bootstrap proves the live mapping before any config change and does not alter the `.click`/`www` aliases.
+
+### iOS payment SDK compatibility
+
+The iOS target uses Stripe PaymentSheet through Swift Package Manager and pins `stripe-ios-spm` exactly to `25.17.0`. Do not change this to an open-ended `upToNextMajorVersion` requirement: unattended watcher builds run on the verified Xcode 16.2 / iPhoneOS 18.2 toolchain, and newer Stripe 26.x source can require newer Apple SDK symbols. Upgrade the pin only together with an explicit Xcode compatibility test.

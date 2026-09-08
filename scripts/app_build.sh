@@ -58,6 +58,7 @@ mkdir -p "$LOG_DIR"
 pb_section "Xcode"
 xcodebuild -version
 pb_field "Developer dir:" "${DEVELOPER_DIR:-$(xcode-select -p)}"
+pb_field "Stripe iOS:" "25.17.0 (exact pin for Xcode 16.2 compatibility)"
 
 if ! xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1; then
   pb_section "Completing Xcode first-launch setup"

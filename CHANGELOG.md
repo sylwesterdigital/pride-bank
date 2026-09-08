@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.9] - 2026-09-09
+
+- Pin Stripe iOS `StripePaymentSheet` exactly to `25.17.0` instead of floating on Stripe 26.x.
+- Restore compatibility with the project machine's Xcode 16.2 / iPhoneOS 18.2 SDK while retaining PaymentSheet support.
+- Add repository verification that rejects floating Stripe SwiftPM requirements, preventing an upstream SDK release from breaking unattended watcher builds.
+- Report the pinned Stripe iOS SDK version during the watcher-owned Xcode build.
+
 ## [0.3.8] - 2026-09-09
 
 - Fix Stripe merchant verification to use Stripe `company.name` for legal-name checks instead of treating the customer-facing `business_profile.name` as a legal entity name.
