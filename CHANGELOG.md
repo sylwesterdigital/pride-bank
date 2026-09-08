@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.4] - 2026-09-08
+
+- Repair Pride-only PostgreSQL `public` schema ownership before migrations on upgraded PostgreSQL 14/legacy clusters.
+- Keep shared PostgreSQL/global configuration untouched; the repair is scoped to database `pride_bank` only and only after ownership collision checks pass.
+- Make migration application atomic: each pending migration and its `schema_migrations` record now commit together or roll back together.
+- Add `004_schema_ownership.sql` to codify the intended schema owner/privileges for future installs.
+- Recovery-safe from partial v0.3.3: already-recorded migrations remain skipped and partially-applied retry-safe 003 statements can rerun safely.
+
 ## [0.3.3] - 2026-09-08
 
 - Fixed Ubuntu migration execution when `/opt/pride-bank` is intentionally inaccessible to the `postgres` OS user: root now streams SQL over stdin to `psql` instead of asking PostgreSQL to open release files directly.

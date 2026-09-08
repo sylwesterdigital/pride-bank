@@ -3,7 +3,7 @@ const secret=(process.env.STRIPE_SECRET_KEY||'').trim();
 const base=(process.env.PUBLIC_BASE_URL||'').trim().replace(/\/$/,'');
 if (!/^sk_(test|live)_/.test(secret)) throw new Error('STRIPE_SECRET_KEY is not configured');
 if (!/^https:\/\//.test(base)) throw new Error('PUBLIC_BASE_URL must be HTTPS before Stripe webhook setup');
-const stripe=new Stripe(secret,{appInfo:{name:'Pride Blocks bootstrap',version:'0.3.3'}});
+const stripe=new Stripe(secret,{appInfo:{name:'Pride Blocks bootstrap',version:'0.3.4'}});
 const url=`${base}/api/v1/stripe/webhook`;
 const events=['payment_intent.succeeded','payment_intent.payment_failed','payment_intent.canceled','charge.dispute.created','charge.refunded'];
 const listed=await stripe.webhookEndpoints.list({limit:100});

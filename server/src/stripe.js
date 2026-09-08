@@ -3,7 +3,7 @@ import Stripe from 'stripe';
 import { config } from './config.js';
 import { pool, tx } from './db.js';
 
-export const stripe = new Stripe(config.stripeSecretKey, { appInfo: { name: 'Pride Blocks', version: '0.3.3' } });
+export const stripe = new Stripe(config.stripeSecretKey, { appInfo: { name: 'Pride Blocks', version: '0.3.4' } });
 
 export const packages = Object.freeze([
   { id: 'blocks_500_gbp', blocks: 500, amount: 500, currency: 'gbp', label: '500 Blocks' },

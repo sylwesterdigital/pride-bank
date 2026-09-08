@@ -150,6 +150,19 @@ elif [[ "$DB_OWNER" == pride_app ]]; then
   ok 'Migrated legacy Pride database ownership from login role pride_app to NOLOGIN role pride_owner.'
 fi
 as_postgres psql -v ON_ERROR_STOP=1 postgres -c "REVOKE ALL ON DATABASE pride_bank FROM PUBLIC; GRANT CONNECT ON DATABASE pride_bank TO pride_app;" >/dev/null
+# Pride owns only the dedicated pride_bank database. Normalize only that database's
+# public schema so migrations can create indexes/functions without relying on the
+# PostgreSQL-version-specific default public-schema owner. Never touch other DBs.
+PB_DB_CHECK="$(as_postgres psql -Atqc "select current_database() || ':' || pg_catalog.pg_get_userbyid((select datdba from pg_database where datname=current_database()))" pride_bank)"
+[[ "$PB_DB_CHECK" == "pride_bank:pride_owner" ]] || die "Pride database safety check failed before schema ownership repair: $PB_DB_CHECK"
+as_postgres psql -v ON_ERROR_STOP=1 pride_bank <<'SQL' >/dev/null
+ALTER SCHEMA public OWNER TO pride_owner;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM pride_app;
+GRANT USAGE, CREATE ON SCHEMA public TO pride_owner;
+GRANT USAGE ON SCHEMA public TO pride_app;
+SQL
+ok 'Verified Pride-only public schema ownership/privileges; no other database was changed.'
 if [[ -z "$DB_PASSWORD" ]]; then
   # App-specific role/database are proven to be Pride-owned, but the old password
   # is unavailable. Rotate only this dedicated role; no shared role is touched.
@@ -215,17 +228,26 @@ log 'Applying Pride-only PostgreSQL migrations as local postgres administrator'
 as_postgres psql -v ON_ERROR_STOP=1 pride_bank -c "CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now()); ALTER TABLE schema_migrations OWNER TO pride_owner;" >/dev/null
 for migration in "$RELEASE_DIR"/migrations/*.sql; do
   name="$(basename "$migration")"
-  applied="$(as_postgres psql -Atqc "select 1 from schema_migrations where name='${name//\'/\'\'}'" pride_bank || true)"
+  sql_name="${name//\'/\'\'}"
+  applied="$(as_postgres psql -Atqc "select 1 from schema_migrations where name='${sql_name}'" pride_bank || true)"
   [[ "$applied" == 1 ]] && continue
+
+  # Apply each migration and its bookkeeping row as one transaction. SQL is
+  # streamed by root, so the postgres OS account never needs /opt traversal.
   if [[ "$name" == 002_ledger_security.sql ]]; then
-    # This migration intentionally needs postgres authority once to normalize
-    # ownership from the legacy v0.3.1 layout before locking the API role down.
-    cat "$migration" | as_postgres psql -v ON_ERROR_STOP=1 pride_bank >/dev/null
+    {
+      printf 'BEGIN;\n'
+      cat "$migration"
+      printf "\nINSERT INTO schema_migrations(name) VALUES ('%s');\nCOMMIT;\n" "$sql_name"
+    } | as_postgres psql -v ON_ERROR_STOP=1 pride_bank >/dev/null
   else
-    { printf 'SET ROLE pride_owner;\n'; cat "$migration"; } | as_postgres psql -v ON_ERROR_STOP=1 pride_bank >/dev/null
+    {
+      printf 'BEGIN;\nSET LOCAL ROLE pride_owner;\n'
+      cat "$migration"
+      printf "\nINSERT INTO schema_migrations(name) VALUES ('%s');\nCOMMIT;\n" "$sql_name"
+    } | as_postgres psql -v ON_ERROR_STOP=1 pride_bank >/dev/null
   fi
-  as_postgres psql -v ON_ERROR_STOP=1 pride_bank -c "insert into schema_migrations(name) values ('${name//\'/\'\'}')" >/dev/null
-  ok "Applied $name"
+  ok "Applied $name atomically"
 done
 
 # Ensure existing web server integration is modified only when unambiguous.
