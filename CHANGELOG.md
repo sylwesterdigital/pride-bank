@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.7] - 2026-09-09
+
+- Fixed server environment handling so `/etc/pride-bank/server.env` is never executed as shell code.
+- Added a strict environment-file parser/normalizer and process launcher; Stripe provisioning receives secrets through process environment without command-line exposure.
+- Automatically normalizes the existing `WORKWORK.FUN LTD` merchant-name entry and validates all known server environment keys before activation.
+- Updated Stripe-key and webhook-secret writes to use safe stdin-based environment updates.
+- Added repository guards that reject any future shell-sourcing of the Pride server environment file.
+
 ## [0.3.6] - 2026-09-09
 
 - Use the canonical `https://mojoworks.xyz/labs/bank` public origin established by the supplied Shar deployment conventions instead of treating `.click`, `.xyz`, `www`, and non-`www` aliases as equally eligible API origins.

@@ -16,6 +16,7 @@ ETC_DIR=/etc/pride-bank
 STATE_DIR=/var/lib/pride-bank
 BACKUP_DIR=/var/backups/pride-bank
 ENV_FILE="$ETC_DIR/server.env"
+ENV_TOOL="$SOURCE_DIR/scripts/env_file.py"
 SERVICE_FILE=/etc/systemd/system/pride-blocks.service
 SNIPPET=/etc/nginx/snippets/pride-bank-api.conf
 MANUAL=0
@@ -133,7 +134,7 @@ fi
 
 DB_PASSWORD=''
 if [[ -f "$ENV_FILE" ]]; then
-  DB_URL_EXISTING="$(grep -E '^DATABASE_URL=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
+  DB_URL_EXISTING="$(python3 "$ENV_TOOL" get "$ENV_FILE" DATABASE_URL 2>/dev/null || true)"
   if [[ "$DB_URL_EXISTING" =~ ^postgresql://pride_app:([^@]+)@127\.0\.0\.1:5432/pride_bank$ ]]; then DB_PASSWORD="${BASH_REMATCH[1]}"; fi
 fi
 if [[ -z "$ROLE_EXISTS" ]]; then
@@ -186,7 +187,7 @@ STRIPE_PUBLISHABLE_KEY=CHANGE_ME
 STRIPE_WEBHOOK_SECRET=CHANGE_ME
 STRIPE_WEBHOOK_ID=CHANGE_ME
 STRIPE_MODE=test
-STRIPE_EXPECTED_BUSINESS_NAME=WORKWORK.FUN LTD
+STRIPE_EXPECTED_BUSINESS_NAME="WORKWORK.FUN LTD"
 PUBLIC_BASE_URL=CHANGE_ME
 IOS_BLOCKS_PURCHASE_RAIL=stripe
 ENV
@@ -196,6 +197,11 @@ else
   chmod 600 "$ENV_FILE"
   ok 'Preserved existing /etc/pride-bank/server.env without overwriting credentials.'
 fi
+[[ -r "$ENV_TOOL" ]] || die "Safe environment parser missing from staged release: $ENV_TOOL"
+python3 "$ENV_TOOL" normalize "$ENV_FILE" >/dev/null
+chown root:root "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+ok 'Validated and normalized Pride server environment as data (never executed as shell code).'
 
 log "Staging isolated backend release v$RELEASE_VERSION"
 rm -rf "$RELEASE_DIR.tmp"
@@ -255,7 +261,7 @@ done
 # Integrate only with an existing HTTPS nginx mapping that can be proven by an
 # actual temporary file served from Pride's public root. This avoids guessing
 # from filesystem strings in config files and supports inherited roots / aliases.
-PUBLIC_BASE_URL="$(grep -E '^PUBLIC_BASE_URL=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
+PUBLIC_BASE_URL="$(python3 "$ENV_TOOL" get "$ENV_FILE" PUBLIC_BASE_URL 2>/dev/null || true)"
 ORIGINAL_PUBLIC_BASE_URL="$PUBLIC_BASE_URL"
 NGINX_SITE_FILE=''
 NGINX_BACKUP=''
@@ -306,7 +312,7 @@ if ! is_https_base "$PUBLIC_BASE_URL"; then
         NGINX_BACKUP="$(printf '%s\n' "$NGINX_RESULT" | sed -n 's/^BACKUP=//p' | tail -n1)"
         if nginx -t; then
           if systemctl reload nginx; then
-            sed -i "s|^PUBLIC_BASE_URL=.*$|PUBLIC_BASE_URL=$DISCOVERED|" "$ENV_FILE"
+            printf '%s\n' "$DISCOVERED" | python3 "$ENV_TOOL" set-stdin "$ENV_FILE" PUBLIC_BASE_URL
             PUBLIC_BASE_URL="$DISCOVERED"
             [[ -n "$NGINX_BACKUP" ]] && NGINX_CHANGED=1
             ok "Added Pride API route to the single HTTPS nginx mapping proven by a live file probe: $DISCOVERED (reload only)."
@@ -347,17 +353,17 @@ rollback_nginx_mapping(){
   fi
   nginx -t && systemctl reload nginx || true
   if [[ -n "$ORIGINAL_PUBLIC_BASE_URL" ]]; then
-    sed -i "s|^PUBLIC_BASE_URL=.*$|PUBLIC_BASE_URL=$ORIGINAL_PUBLIC_BASE_URL|" "$ENV_FILE"
+    printf '%s\n' "$ORIGINAL_PUBLIC_BASE_URL" | python3 "$ENV_TOOL" set-stdin "$ENV_FILE" PUBLIC_BASE_URL
   else
-    sed -i 's|^PUBLIC_BASE_URL=.*$|PUBLIC_BASE_URL=CHANGE_ME|' "$ENV_FILE"
+    printf 'CHANGE_ME\n' | python3 "$ENV_TOOL" set-stdin "$ENV_FILE" PUBLIC_BASE_URL
   fi
 }
 
 # Human secrets are the only intentionally non-generated values.
-STRIPE_SECRET="$(grep -E '^STRIPE_SECRET_KEY=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
-STRIPE_PUB="$(grep -E '^STRIPE_PUBLISHABLE_KEY=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
-WEBHOOK_SECRET="$(grep -E '^STRIPE_WEBHOOK_SECRET=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
-WEBHOOK_ID="$(grep -E '^STRIPE_WEBHOOK_ID=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
+STRIPE_SECRET="$(python3 "$ENV_TOOL" get "$ENV_FILE" STRIPE_SECRET_KEY 2>/dev/null || true)"
+STRIPE_PUB="$(python3 "$ENV_TOOL" get "$ENV_FILE" STRIPE_PUBLISHABLE_KEY 2>/dev/null || true)"
+WEBHOOK_SECRET="$(python3 "$ENV_TOOL" get "$ENV_FILE" STRIPE_WEBHOOK_SECRET 2>/dev/null || true)"
+WEBHOOK_ID="$(python3 "$ENV_TOOL" get "$ENV_FILE" STRIPE_WEBHOOK_ID 2>/dev/null || true)"
 if [[ ! "$STRIPE_SECRET" =~ ^sk_(test|live)_ ]] || [[ ! "$STRIPE_PUB" =~ ^pk_(test|live)_ ]]; then
   warn 'Stripe credentials are not yet configured. The foreground watcher can collect these once with hidden secret input.'
   NEED_STRIPE_KEYS=1
@@ -380,9 +386,9 @@ fi
 # Create or reconcile the Pride Stripe webhook after one exact HTTPS mapping is
 # proven. Store both endpoint id and signing secret so later path/host changes can
 # update the same endpoint without losing the signing secret.
-set -a; . "$ENV_FILE"; set +a
+python3 "$ENV_TOOL" validate "$ENV_FILE" >/dev/null
 set +e
-STRIPE_RESULT="$(node "$RELEASE_DIR/scripts/configure-stripe.js" 2>&1)"
+STRIPE_RESULT="$(python3 "$ENV_TOOL" exec "$ENV_FILE" -- node "$RELEASE_DIR/scripts/configure-stripe.js" 2>&1)"
 STRIPE_RC=$?
 set -e
 if (( STRIPE_RC == 0 )); then
@@ -390,12 +396,8 @@ if (( STRIPE_RC == 0 )); then
   NEW_WEBHOOK_ID="$(printf '%s\n' "$STRIPE_RESULT" | sed -n 's/^STRIPE_WEBHOOK_ID=//p' | tail -n1)"
   [[ "$NEW_WHSEC" =~ ^whsec_ ]] || die 'Stripe webhook setup succeeded without a usable signing secret.'
   [[ "$NEW_WEBHOOK_ID" =~ ^we_ ]] || die 'Stripe webhook setup succeeded without a usable endpoint id.'
-  sed -i "s|^STRIPE_WEBHOOK_SECRET=.*$|STRIPE_WEBHOOK_SECRET=$NEW_WHSEC|" "$ENV_FILE"
-  if grep -q '^STRIPE_WEBHOOK_ID=' "$ENV_FILE"; then
-    sed -i "s|^STRIPE_WEBHOOK_ID=.*$|STRIPE_WEBHOOK_ID=$NEW_WEBHOOK_ID|" "$ENV_FILE"
-  else
-    printf 'STRIPE_WEBHOOK_ID=%s\n' "$NEW_WEBHOOK_ID" >> "$ENV_FILE"
-  fi
+  printf 'STRIPE_WEBHOOK_SECRET=%s\nSTRIPE_WEBHOOK_ID=%s\n' "$NEW_WHSEC" "$NEW_WEBHOOK_ID" | python3 "$ENV_TOOL" set-many-stdin "$ENV_FILE"
+  python3 "$ENV_TOOL" validate "$ENV_FILE" >/dev/null
   WEBHOOK_SECRET="$NEW_WHSEC"
   WEBHOOK_ID="$NEW_WEBHOOK_ID"
   ok 'Stripe webhook endpoint is configured and its signing secret is stored root-only.'
