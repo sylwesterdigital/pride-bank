@@ -1,18 +1,8 @@
-# Local release drop folder and watcher state
 /archive/
 /.watch-state/
-
-# Local/runtime files
+/build/
 .DS_Store
+xcuserdata/
+*.xcuserstate
 .env
 .env.*
-/data/
-/uploads/
-/logs/
-
-# Common editor/build noise
-.vscode/
-.idea/
-*.swp
-__pycache__/
-*.pyc

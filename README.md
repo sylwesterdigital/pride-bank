@@ -1,53 +1,29 @@
-# Pride Bank / Blocks prototype
+# Pride Bank / Blocks
 
-Current release: **v0.1.3**
+Version 0.2.0.
+
+A mobile-first internal creative economy. Blocks are internal units members can use across the service to send, request, add, buy creative products and participate in Worlds.
 
 ## Release workflow
 
-The foreground watcher is the only command required on the Mac:
+The foreground watcher is the single local command:
 
 ```zsh
 ./scripts/build-watch.sh
 ```
 
-While it is running it:
+Drop a complete release ZIP named `pride-bank-vX.Y.Z.zip` into `archive/`. The watcher follows the Shar-style flow: wait for a stable ZIP, validate it, synchronise the repository authoritatively, verify/build, commit/push, deploy the homepage to the configured Ubuntu target, verify deployment, then continue watching.
 
-- watches `archive/` for `pride-bank-v*.zip`;
-- waits until a ZIP is stable before touching it;
-- validates and applies the complete source release;
-- runs repository/product verification;
-- reloads itself when watcher code changes;
-- runs `scripts/deploy.sh` for every source version not yet deployed;
-- commits/pushes the release source to `main`;
-- deploys the web surface to `/var/www/mojoworks/labs/bank`;
-- returns to watching for the next ZIP.
-
-There is no local demo server and no second development command in the release workflow.
-
-## Deployment profile
-
-Private SSH details stay outside Git at:
-
-```text
-~/.config/workwork/pride-bank-release.env
-```
-
-On first use, `scripts/release_profile.sh` can import the existing Rantlist or Shar release SSH profile and pins the Pride Bank remote directory to:
+The server target is pinned to:
 
 ```text
 /var/www/mojoworks/labs/bank
 ```
 
-## Release delivery
+## v0.2.0 product slice
 
-Drop newer releases into:
+The first native iOS slice implements the protected first-run journey:
 
-```text
-archive/
-```
+Splash → Welcome → Identity → 6-digit PIN → Locked → PIN unlock → Home / Blocks.
 
-The directory is intentionally Git ignored.
-
-## Product direction
-
-Blocks is an internal creative-platform economy. User-facing language avoids crypto, trading and speculative-finance framing.
+The deployed homepage contains a mobile web demo of the same journey. It intentionally does not expose the Blocks balance until setup and unlock have completed.
