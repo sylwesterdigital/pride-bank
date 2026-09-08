@@ -1,39 +1,33 @@
-# Pride Bank / Blocks
+# Pride — Blocks
 
-Version 0.2.4.
-
-A mobile-first internal creative economy. Blocks are internal units members can use across the service to send, request, add, buy creative products and participate in Worlds.
+Pride is an internal digital economy. Blocks are service units used inside Pride; the product intentionally avoids crypto/trading language.
 
 ## Release workflow
 
-The foreground watcher is the single local command:
+Run `./scripts/build-watch.sh` on the macOS development machine and drop versioned ZIP releases into `archive/`. The watcher validates, applies, builds/installs the iOS app when a physical device is available, commits/pushes source, deploys the server components, and resumes watching.
 
-```zsh
-./scripts/build-watch.sh
-```
+## Real accounts and Blocks ledger
 
-Drop a complete release ZIP named `pride-bank-vX.Y.Z.zip` into `archive/`. The watcher follows the Shar-style flow: wait for a stable ZIP, validate it, synchronise the repository authoritatively, verify/build, commit/push, deploy the homepage to the configured Ubuntu target, verify deployment, then continue watching.
+The authoritative balance is PostgreSQL on the Ubuntu server. The iOS app never credits itself. User passwords are scrypt-hashed server-side, API sessions are opaque random tokens stored hashed in PostgreSQL and stored in iOS Keychain, while the six-digit PIN protects the local authenticated session.
 
-The server target is pinned to:
+Blocks are recorded with immutable double-entry ledger rows. Member transfers and Stripe top-ups are posted atomically in PostgreSQL. Stripe top-ups are credited only from a verified `payment_intent.succeeded` webhook and both Stripe event IDs and PaymentIntent references are unique/idempotent.
 
-```text
-/var/www/mojoworks/labs/bank
-```
+## Stripe
 
-## Product slice
+The Stripe secret key and webhook secret are server-only. The release never contains them. PaymentIntent amounts/packages are chosen by the server, not trusted from the iPhone. The Stripe account represented by `STRIPE_SECRET_KEY` is the account that receives real money; configure that Stripe account for **WORKWORK.FUN LTD**.
 
-The first native iOS slice implements the protected first-run journey:
+Copy `server/server.env.example` to `/etc/pride-bank/server.env` on the Ubuntu host (permissions 600) and provide the real PostgreSQL/Stripe values. `STRIPE_MODE=test` is strongly recommended until end-to-end reconciliation is verified; switching to `live` requires an `sk_live_` key and is explicit.
 
-Splash → Welcome → Identity → 6-digit PIN → Locked → PIN unlock → Home / Blocks.
+The API listens on `127.0.0.1:4317`; configure your HTTPS virtual host to proxy `/api/` using `server/scripts/nginx-location.conf`. Set `PUBLIC_BASE_URL` and the Pride release profile `PB_API_BASE_URL` to the public HTTPS `/api/` URL.
 
-The deployed homepage contains a mobile web demo of the same journey. It intentionally does not expose the Blocks balance until setup and unlock have completed.
+## App Store payment policy
 
-## Brand
+Stripe PaymentSheet is included for direct development and distribution contexts where it is permitted. Blocks are a digital in-app unit, so App Store distribution generally requires Apple In-App Purchase for purchasing Blocks. The server ledger is payment-rail independent so a StoreKit settlement adapter can credit the same ledger after App Store server verification.
 
-`brand/pride-bank.svg` is the canonical Pride mark. The native iOS app icon and in-app imagery, plus the hosted web favicon, splash, onboarding and header branding, are derived from that supplied source. Product code must not introduce a replacement geometric/block logo.
+## Safe Ubuntu bootstrap
 
-## Physical iOS deployment
+The watcher owns the complete release sequence. On Ubuntu it treats the host as shared production infrastructure: existing PostgreSQL/nginx installations are inspected and reused without global configuration rewrites; only Pride-specific database/user, service, config, release, state and backup resources are created. Missing packages are installed only when the corresponding service/tool is genuinely absent. Existing ambiguous or unhealthy shared services cause a precise stop instead of an automatic repair.
 
-The foreground `scripts/build-watch.sh` owns mobile deployment. After a release ZIP is applied and verified, the release pipeline enumerates Xcode devices. If exactly one trusted physical iOS device is available it builds `PrideBank` for that device, signs it using the configured Apple development team, installs the `.app`, launches `xyz.mojoworks.pridebank`, then continues the normal Git and Ubuntu deployment flow.
+Backend runtime layout: `/opt/pride-bank` (releases/current), `/etc/pride-bank` (root-only config), `/var/lib/pride-bank` (state), `/var/backups/pride-bank` (Pride-only backups). The public site remains `/var/www/mojoworks/labs/bank`.
 
-If no physical device is connected, the release performs a simulator compile check and continues. If a physical device is present but unavailable, or multiple devices are available without an explicit `PB_IOS_DEVICE_ID`, the release stops instead of silently deploying to the wrong place.
+The only unavoidable one-time external input is Stripe account credentials (`STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`) and, when an existing web server cannot be unambiguously mapped to Pride, the HTTPS site mapping. The webhook endpoint/signing secret is created automatically when possible.

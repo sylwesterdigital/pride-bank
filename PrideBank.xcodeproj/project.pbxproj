@@ -12,6 +12,10 @@
 		A10000000000000000000004 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* DesignSystem.swift */; };
 		A10000000000000000000005 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* RootView.swift */; };
 		A10000000000000000000006 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* Assets.xcassets */; };
+		A10000000000000000000009 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* APIClient.swift */; };
+		A10000000000000000000010 /* SecureSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* SecureSessionStore.swift */; };
+		A10000000000000000000011 /* StripeTopUpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* StripeTopUpView.swift */; };
+		A10000000000000000000012 /* StripePaymentSheet in Frameworks */ = {isa = PBXBuildFile; productRef = C30000000000000000000001 /* StripePaymentSheet */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -23,13 +27,18 @@
 		A20000000000000000000006 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A20000000000000000000007 /* PrideBank.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PrideBank.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000008 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A20000000000000000000009 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		A20000000000000000000010 /* SecureSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureSessionStore.swift; sourceTree = "<group>"; };
+		A20000000000000000000011 /* StripeTopUpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StripeTopUpView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A30000000000000000000001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
-			files = ();
+			files = (
+				A10000000000000000000012 /* StripePaymentSheet in Frameworks */,
+			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -53,6 +62,9 @@
 				A20000000000000000000005 /* RootView.swift */,
 				A20000000000000000000006 /* Info.plist */,
 				A20000000000000000000008 /* Assets.xcassets */,
+				A20000000000000000000009 /* APIClient.swift */,
+				A20000000000000000000010 /* SecureSessionStore.swift */,
+				A20000000000000000000011 /* StripeTopUpView.swift */,
 			);
 			path = PrideBank;
 			sourceTree = "<group>";
@@ -79,6 +91,9 @@
 			name = PrideBank;
 			productName = PrideBank;
 			productReference = A20000000000000000000007 /* PrideBank.app */;
+			packageProductDependencies = (
+				C30000000000000000000001 /* StripePaymentSheet */,
+			);
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -98,6 +113,9 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (en, Base,);
 			mainGroup = A40000000000000000000001;
+			packageReferences = (
+				C10000000000000000000001 /* XCRemoteSwiftPackageReference "stripe-ios" */,
+			);
 			productRefGroup = A40000000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -126,16 +144,35 @@
 				A10000000000000000000003 /* SecurePINStore.swift in Sources */,
 				A10000000000000000000004 /* DesignSystem.swift in Sources */,
 				A10000000000000000000005 /* RootView.swift in Sources */,
+				A10000000000000000000009 /* APIClient.swift in Sources */,
+				A10000000000000000000010 /* SecureSessionStore.swift in Sources */,
+				A10000000000000000000011 /* StripeTopUpView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		C10000000000000000000001 /* XCRemoteSwiftPackageReference "stripe-ios" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stripe/stripe-ios-spm";
+			requirement = { kind = upToNextMajorVersion; minimumVersion = 26.8.0; };
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C30000000000000000000001 /* StripePaymentSheet */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C10000000000000000000001 /* XCRemoteSwiftPackageReference "stripe-ios" */;
+			productName = StripePaymentSheet;
+		};
+/* End XCSwiftPackageProductDependency section */
+
 /* Begin XCBuildConfiguration section */
 		B10000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; ONLY_ACTIVE_ARCH = YES; SDKROOT = iphoneos; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
 		B10000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_ENABLE_MODULES = YES; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; VALIDATE_PRODUCT = YES; }; name = Release; };
-		B20000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 24; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = PrideBank/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 0.2.4; PRODUCT_BUNDLE_IDENTIFIER = xyz.mojoworks.pridebank; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
-		B20000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 24; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = PrideBank/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 0.2.4; PRODUCT_BUNDLE_IDENTIFIER = xyz.mojoworks.pridebank; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
+		B20000000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 32; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = PrideBank/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 0.3.2; PRODUCT_BUNDLE_IDENTIFIER = xyz.mojoworks.pridebank; PRODUCT_NAME = "$(TARGET_NAME)"; PRIDE_API_BASE_URL = "https://invalid.local/api/"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
+		B20000000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 32; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = PrideBank/Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MARKETING_VERSION = 0.3.2; PRODUCT_BUNDLE_IDENTIFIER = xyz.mojoworks.pridebank; PRODUCT_NAME = "$(TARGET_NAME)"; PRIDE_API_BASE_URL = "https://invalid.local/api/"; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */

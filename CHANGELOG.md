@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.2] - 2026-09-08
+
+- Added shared-Ubuntu-safe bootstrap: inspect first, install only genuinely missing fresh-host prerequisites, and never rewrite PostgreSQL global configuration.
+- Isolated backend code under `/opt/pride-bank`, config under `/etc/pride-bank`, state under `/var/lib/pride-bank`, and backups under `/var/backups/pride-bank`.
+- Added Pride-only PostgreSQL role/database provisioning with collision checks, pre-migration backups, additive migrations, ledger role hardening, and deferred double-entry balance enforcement.
+- Added conservative nginx integration: modify exactly one unambiguous HTTPS server block serving the Pride public root, validate with `nginx -t`, reload only, and restore on validation failure.
+- Added automatic generation of database credentials/session pepper and automatic Stripe webhook creation once the two Stripe account keys are supplied.
+- Reordered release flow so the server is bootstrapped and verified before the iOS app is built/installed; the watcher no longer requires a manually exported API URL.
+- Fixed iOS version metadata to derive from Xcode build settings.
+
+## [0.3.1] - 2026-09-08
+
+### Fixed
+- Fixed the v0.3.0 watcher transition that stripped `server/.env.example` before repository verification.
+- Renamed the safe configuration template to `server/server.env.example` so both the already-running v0.3.0 watcher and future watchers preserve it while still excluding all real `.env` secret files.
+- Updated backend deployment to copy the safe template to `/etc/pride-bank/server.env.example` when server secrets have not yet been provisioned.
+- Added release checks proving secret `.env` files are excluded while the safe template is present.
+
+## [0.3.0] - 2026-09-08
+
+- Replaced demo-only balances with a PostgreSQL-backed Blocks account and immutable double-entry ledger.
+- Added real user registration, opaque server sessions, Keychain session storage, and server-backed balance/activity.
+- Added Stripe PaymentIntent top-ups with fixed service packages, webhook signature verification, idempotent settlement, refunds/dispute account freezing, and WORKWORK.FUN LTD merchant metadata.
+- Added Stripe iOS PaymentSheet integration for permitted/direct-development distribution.
+- Added Ubuntu Blocks API deployment, migrations, systemd service template, and nginx reverse-proxy include.
+- Added safety gates: no client-side crediting, no secrets in Git/ZIP, HTTPS API requirement, server environment validation, and Stripe account startup verification.
+
 ## [0.2.4] - 2026-09-08
 
 ### Fixed

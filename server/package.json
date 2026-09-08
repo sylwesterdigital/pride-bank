@@ -1,0 +1,18 @@
+{
+  "name": "pride-blocks-server",
+  "version": "0.3.2",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=20"},
+  "scripts": {
+    "start": "node src/index.js",
+    "migrate": "node scripts/migrate.js",
+    "check": "node --check src/index.js && node --check src/db.js && node --check src/auth.js && node --check src/ledger.js && node --check src/stripe.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "pg": "^8.16.3",
+    "stripe": "^18.5.0"
+  }
+}

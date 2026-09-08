@@ -9,8 +9,13 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PA
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 source "$SCRIPT_DIR/terminal_style.sh"
+source "$SCRIPT_DIR/release_profile.sh"
 ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
+pb_load_release_profile
+API_BASE_URL="${PB_API_BASE_URL:-${PB_REMOTE_URL:+${PB_REMOTE_URL%/}/api/}}"
+[[ -n "$API_BASE_URL" ]] || { pb_error "Verified backend deployment did not provide PB_API_BASE_URL. The watcher should obtain this automatically from deploy_backend.sh; refusing to build an app pointed at an unknown service."; exit 1; }
+[[ "$API_BASE_URL" == https://* ]] || { pb_error "Pride API URL must use HTTPS: $API_BASE_URL"; exit 1; }
 
 PROJECT="$ROOT/PrideBank.xcodeproj"
 SCHEME="PrideBank"
@@ -173,6 +178,7 @@ xcodebuild \
   CODE_SIGN_STYLE=Automatic \
   DEVELOPMENT_TEAM="$TEAM_ID" \
   PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+  PRIDE_API_BASE_URL="$API_BASE_URL" \
   clean build > >(tee "$BUILD_LOG") 2>&1
 BUILD_STATUS=$?
 set -e

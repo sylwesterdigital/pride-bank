@@ -1,4 +1,5 @@
 import SwiftUI
+import StripePaymentSheet
 
 struct RootView: View {
     @EnvironmentObject private var appState: AppState
@@ -75,69 +76,61 @@ private struct IdentityView: View {
     @EnvironmentObject private var appState: AppState
     @State private var name = ""
     @State private var username = ""
-    @FocusState private var focused: Field?
-
-    private enum Field { case name, username }
+    @State private var email = ""
+    @State private var password = ""
 
     private var canContinue: Bool {
-        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        username.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "@", with: "").count >= 3
+        name.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 &&
+        username.replacingOccurrences(of: "@", with: "").count >= 3 &&
+        email.contains("@") && password.count >= 12
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Your identity")
-                .font(.system(size: 34, weight: .bold, design: .rounded))
-            Text("This is how other members will find and recognise you.")
-                .font(.system(size: 17, design: .rounded))
-                .foregroundStyle(PrideTheme.secondary)
-                .padding(.top, 10)
-
-            VStack(spacing: 12) {
-                field(title: "Display name", text: $name, field: .name, capitalization: .words)
-                field(title: "Username", text: $username, field: .username, capitalization: .never)
-            }
-            .padding(.top, 34)
-
-            if !username.isEmpty {
-                Text("@" + username.replacingOccurrences(of: "@", with: "").lowercased())
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Create your Pride account")
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                Text("Your account holds your identity, Blocks balance and transaction history securely on Pride.")
+                    .font(.system(size: 17, design: .rounded))
                     .foregroundStyle(PrideTheme.secondary)
                     .padding(.top, 10)
-            }
 
-            Spacer()
+                VStack(spacing: 12) {
+                    accountField("Display name", text: $name, secure: false, keyboard: .default)
+                    accountField("Username", text: $username, secure: false, keyboard: .default)
+                    accountField("Email", text: $email, secure: false, keyboard: .emailAddress)
+                    accountField("Password (12+ characters)", text: $password, secure: true, keyboard: .default)
+                }.padding(.top, 28)
 
-            Button("Continue") {
-                focused = nil
-                appState.saveIdentity(name: name, username: username)
+                if let error = appState.accountError {
+                    Text(error).font(.system(size: 13, weight: .medium)).foregroundStyle(.red.opacity(0.9)).padding(.top, 12)
+                }
+
+                Button(appState.isBusy ? "Creating account…" : "Continue") {
+                    Task { await appState.createAccount(name: name, username: username, email: email, password: password) }
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(!canContinue || appState.isBusy)
+                .opacity(canContinue && !appState.isBusy ? 1 : 0.45)
+                .padding(.top, 28)
             }
-            .buttonStyle(PrimaryButtonStyle())
-            .disabled(!canContinue)
-            .opacity(canContinue ? 1 : 0.45)
+            .padding(.horizontal, 24).padding(.vertical, 30)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 30)
-        .onAppear { focused = .name }
     }
 
-    private func field(title: String, text: Binding<String>, field: Field, capitalization: TextInputAutocapitalization) -> some View {
+    @ViewBuilder
+    private func accountField(_ title: String, text: Binding<String>, secure: Bool, keyboard: UIKeyboardType) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(PrideTheme.secondary)
-            TextField(title, text: text)
-                .textInputAutocapitalization(capitalization)
-                .autocorrectionDisabled()
-                .focused($focused, equals: field)
-                .font(.system(size: 18, weight: .medium, design: .rounded))
-                .padding(.horizontal, 17)
-                .frame(height: 58)
-                .background(PrideTheme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            Text(title).font(.system(size: 13, weight: .semibold, design: .rounded)).foregroundStyle(PrideTheme.secondary)
+            Group {
+                if secure { SecureField(title, text: text) } else { TextField(title, text: text) }
+            }
+            .keyboardType(keyboard).textInputAutocapitalization(title == "Display name" ? .words : .never).autocorrectionDisabled()
+            .font(.system(size: 18, weight: .medium, design: .rounded)).padding(.horizontal, 17).frame(height: 58)
+            .background(PrideTheme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
     }
 }
-
 private struct PINEntryView: View {
     enum Mode { case create, confirm, unlock }
 
@@ -449,11 +442,7 @@ private struct QuickActionSheet: View {
                     Text("Create a request for another member.")
                         .foregroundStyle(PrideTheme.secondary)
                 case .add:
-                    VStack(spacing: 10) {
-                        package("500 Blocks", "£5")
-                        package("1,000 Blocks", "£10")
-                        package("2,500 Blocks", "£25")
-                    }
+                    AddBlocksView()
                 }
                 Spacer()
             }
@@ -469,15 +458,6 @@ private struct QuickActionSheet: View {
         .preferredColorScheme(.dark)
     }
 
-    private func package(_ blocks: String, _ price: String) -> some View {
-        HStack {
-            Text(blocks).fontWeight(.semibold)
-            Spacer()
-            Text(price).foregroundStyle(PrideTheme.secondary)
-        }
-        .padding(16)
-        .background(PrideTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
 }
 
 private struct BlocksView: View {
@@ -591,7 +571,7 @@ private struct ProfileView: View {
                 }
                 Section {
                     Button("Lock app") { appState.lockIfNeeded() }
-                    Button("Reset demo", role: .destructive) { appState.resetDemo() }
+                    Button("Reset demo", role: .destructive) { appState.resetAccount() }
                 }
             }
             .scrollContentBackground(.hidden)

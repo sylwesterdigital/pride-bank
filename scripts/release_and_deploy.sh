@@ -25,8 +25,6 @@ log "Repository verification"
 source ./scripts/release_profile.sh
 pb_load_release_profile
 network_retry ssh -o BatchMode=yes -o ConnectTimeout=12 -p "$PB_REMOTE_PORT" "$PB_REMOTE_USER@$PB_REMOTE_HOST" true || fail "Server SSH access failed after retries."
-log "Building / deploying mobile app"
-./scripts/app_build.sh
 log "Committing release source"
 git add -A
 if git diff --cached --quiet; then log "No source changes to commit; using existing HEAD."; else git commit -m "Release v$VERSION"; fi
@@ -34,6 +32,11 @@ log "Pushing $BRANCH"
 network_retry git push origin "$BRANCH"
 log "Deploying Pride homepage/system"
 ./scripts/deploy_homepage.sh
+log "Bootstrapping / deploying Pride Blocks API"
+./scripts/deploy_backend.sh
+log "Building / installing mobile app against verified API"
+./scripts/app_build.sh
 pb_banner_success "PRIDE RELEASE v$VERSION COMPLETED SUCCESSFULLY"
 pb_field "GitHub:" "git@github.com:sylwesterdigital/pride-bank.git"
-pb_field "Server:" "/var/www/mojoworks/labs/bank"
+pb_field "Public web:" "$PB_REMOTE_DIR"
+pb_field "Backend:" "/opt/pride-bank/current"
