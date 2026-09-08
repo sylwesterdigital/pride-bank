@@ -183,6 +183,7 @@ SESSION_PEPPER=${SESSION_PEPPER}
 STRIPE_SECRET_KEY=CHANGE_ME
 STRIPE_PUBLISHABLE_KEY=CHANGE_ME
 STRIPE_WEBHOOK_SECRET=CHANGE_ME
+STRIPE_WEBHOOK_ID=CHANGE_ME
 STRIPE_MODE=test
 STRIPE_EXPECTED_BUSINESS_NAME=WORKWORK.FUN LTD
 PUBLIC_BASE_URL=CHANGE_ME
@@ -250,61 +251,113 @@ for migration in "$RELEASE_DIR"/migrations/*.sql; do
   ok "Applied $name atomically"
 done
 
-# Ensure existing web server integration is modified only when unambiguous.
+# Integrate only with an existing HTTPS nginx mapping that can be proven by an
+# actual temporary file served from Pride's public root. This avoids guessing
+# from filesystem strings in config files and supports inherited roots / aliases.
 PUBLIC_BASE_URL="$(grep -E '^PUBLIC_BASE_URL=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
-if [[ ! "$PUBLIC_BASE_URL" =~ ^https://[^/[:space:]]+$ ]]; then
+ORIGINAL_PUBLIC_BASE_URL="$PUBLIC_BASE_URL"
+NGINX_SITE_FILE=''
+NGINX_BACKUP=''
+NGINX_CHANGED=0
+SNIPPET_EXISTED=0
+SNIPPET_BACKUP=''
+is_https_base(){ [[ "$1" =~ ^https://[^/[:space:]]+(/[^[:space:]?#]*)?$ ]]; }
+if ! is_https_base "$PUBLIC_BASE_URL"; then
   if command -v nginx >/dev/null 2>&1; then
-    mapfile -t SITE_FILES < <(grep -RIl --exclude='*.bak' -F "$PUBLIC_ROOT" /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | xargs -r -n1 readlink -f | sort -u)
-    if (( ${#SITE_FILES[@]} == 1 )); then
-      install -D -m 0644 "$RELEASE_DIR/scripts/nginx-location.conf" "$SNIPPET"
+    set +e
+    DISCOVERY="$(python3 "$RELEASE_DIR/scripts/discover_nginx.py" --root "$PUBLIC_ROOT" 2>&1)"
+    DISCOVERY_RC=$?
+    set -e
+    if (( DISCOVERY_RC == 0 )); then
+      printf '%s\n' "$DISCOVERY"
+      NGINX_SITE_FILE="$(printf '%s\n' "$DISCOVERY" | sed -n 's/^SITE_FILE=//p' | tail -n1)"
+      SERVER_NAME="$(printf '%s\n' "$DISCOVERY" | sed -n 's/^SERVER_NAME=//p' | tail -n1)"
+      BASE_PATH="$(printf '%s\n' "$DISCOVERY" | sed -n 's/^BASE_PATH=//p' | tail -n1)"
+      DISCOVERED="$(printf '%s\n' "$DISCOVERY" | sed -n 's/^PUBLIC_BASE_URL=//p' | tail -n1)"
+      [[ -n "$NGINX_SITE_FILE" && -f "$NGINX_SITE_FILE" ]] || die 'nginx discovery returned an invalid source config file.'
+      [[ "$SERVER_NAME" =~ ^[A-Za-z0-9.-]+$ ]] || die 'nginx discovery returned an invalid server_name.'
+      [[ "$BASE_PATH" == /* ]] || die 'nginx discovery returned an invalid public base path.'
+      is_https_base "$DISCOVERED" || die 'nginx discovery returned an invalid HTTPS public URL.'
+
+      # Generate a Pride-only location snippet at the proven mounted path.
+      if [[ "$BASE_PATH" == / ]]; then API_PATH='/api/'; else API_PATH="${BASE_PATH%/}/api/"; fi
+      install -d -m 0755 "$(dirname "$SNIPPET")"
+      if [[ -f "$SNIPPET" ]]; then
+        SNIPPET_EXISTED=1
+        SNIPPET_BACKUP="$BACKUP_DIR/nginx/pride-bank-api.conf.$(date +%Y%m%d%H%M%S).bak"
+        cp -a "$SNIPPET" "$SNIPPET_BACKUP"
+      fi
+      sed "s|^location /api/ {|location $API_PATH {|" "$RELEASE_DIR/scripts/nginx-location.conf" > "$SNIPPET.tmp"
+      install -m 0644 "$SNIPPET.tmp" "$SNIPPET"
+      rm -f "$SNIPPET.tmp"
+
       set +e
-      NGINX_RESULT="$(python3 "$RELEASE_DIR/scripts/configure_nginx.py" --site "${SITE_FILES[0]}" --root "$PUBLIC_ROOT" --backup-dir "$BACKUP_DIR/nginx" 2>&1)"
+      NGINX_RESULT="$(python3 "$RELEASE_DIR/scripts/configure_nginx.py" --site "$NGINX_SITE_FILE" --server-name "$SERVER_NAME" --snippet "$SNIPPET" --backup-dir "$BACKUP_DIR/nginx" 2>&1)"
       NGINX_RC=$?
       set -e
       if (( NGINX_RC == 0 )); then
         printf '%s\n' "$NGINX_RESULT"
-        DISCOVERED="$(printf '%s\n' "$NGINX_RESULT" | sed -n 's/^PUBLIC_BASE_URL=//p' | tail -n1)"
-        BACKUP="$(printf '%s\n' "$NGINX_RESULT" | sed -n 's/^BACKUP=//p' | tail -n1)"
+        NGINX_BACKUP="$(printf '%s\n' "$NGINX_RESULT" | sed -n 's/^BACKUP=//p' | tail -n1)"
         if nginx -t; then
           if systemctl reload nginx; then
             sed -i "s|^PUBLIC_BASE_URL=.*$|PUBLIC_BASE_URL=$DISCOVERED|" "$ENV_FILE"
             PUBLIC_BASE_URL="$DISCOVERED"
-            ok "Added Pride /api/ include to the single HTTPS nginx site serving $PUBLIC_ROOT and reloaded nginx (no restart)."
+            [[ -n "$NGINX_BACKUP" ]] && NGINX_CHANGED=1
+            ok "Added Pride API route to the single HTTPS nginx mapping proven by a live file probe: $DISCOVERED (reload only)."
           else
-            [[ -n "$BACKUP" ]] && cp -a "$BACKUP" "${SITE_FILES[0]}"
+            [[ -n "$NGINX_BACKUP" ]] && cp -a "$NGINX_BACKUP" "$NGINX_SITE_FILE"
             nginx -t && systemctl reload nginx || true
             die 'nginx reload failed; original site file was restored.'
           fi
         else
-          [[ -n "$BACKUP" ]] && cp -a "$BACKUP" "${SITE_FILES[0]}"
+          [[ -n "$NGINX_BACKUP" ]] && cp -a "$NGINX_BACKUP" "$NGINX_SITE_FILE"
           nginx -t || true
           die 'nginx validation failed; original site file was restored.'
         fi
       else
         warn "$NGINX_RESULT"
-        warn 'Existing nginx configuration was left untouched because Pride could not identify one safe HTTPS server block.'
+        warn 'The proven nginx source block could not be modified safely; no persistent public URL was recorded.'
         MANUAL=1
       fi
     else
-      warn "Found ${#SITE_FILES[@]} nginx config files referencing $PUBLIC_ROOT; expected exactly one. No nginx files were modified."
+      warn "$DISCOVERY"
+      warn 'Could not prove exactly one HTTPS mapping for the Pride public root. No nginx files were modified.'
       MANUAL=1
     fi
   else
-    warn 'nginx is not installed. Pride will not install/take over a web server on a shared host without an unambiguous HTTPS site.'
+    warn 'nginx is not installed. Pride will not install/take over a web server on a shared host without an existing HTTPS site.'
     MANUAL=1
   fi
 fi
+
+rollback_nginx_mapping(){
+  if (( NGINX_CHANGED )) && [[ -n "$NGINX_BACKUP" && -n "$NGINX_SITE_FILE" ]]; then
+    cp -a "$NGINX_BACKUP" "$NGINX_SITE_FILE"
+  fi
+  if (( SNIPPET_EXISTED )) && [[ -n "$SNIPPET_BACKUP" ]]; then
+    cp -a "$SNIPPET_BACKUP" "$SNIPPET"
+  elif (( ! SNIPPET_EXISTED )); then
+    rm -f "$SNIPPET"
+  fi
+  nginx -t && systemctl reload nginx || true
+  if [[ -n "$ORIGINAL_PUBLIC_BASE_URL" ]]; then
+    sed -i "s|^PUBLIC_BASE_URL=.*$|PUBLIC_BASE_URL=$ORIGINAL_PUBLIC_BASE_URL|" "$ENV_FILE"
+  else
+    sed -i 's|^PUBLIC_BASE_URL=.*$|PUBLIC_BASE_URL=CHANGE_ME|' "$ENV_FILE"
+  fi
+}
 
 # Human secrets are the only intentionally non-generated values.
 STRIPE_SECRET="$(grep -E '^STRIPE_SECRET_KEY=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
 STRIPE_PUB="$(grep -E '^STRIPE_PUBLISHABLE_KEY=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
 WEBHOOK_SECRET="$(grep -E '^STRIPE_WEBHOOK_SECRET=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
+WEBHOOK_ID="$(grep -E '^STRIPE_WEBHOOK_ID=' "$ENV_FILE" | head -n1 | cut -d= -f2- || true)"
 if [[ ! "$STRIPE_SECRET" =~ ^sk_(test|live)_ ]] || [[ ! "$STRIPE_PUB" =~ ^pk_(test|live)_ ]]; then
   warn 'Stripe credentials are not yet configured. The foreground watcher can collect these once with hidden secret input.'
   NEED_STRIPE_KEYS=1
   MANUAL=1
 fi
-if [[ ! "$PUBLIC_BASE_URL" =~ ^https:// ]]; then
+if ! is_https_base "$PUBLIC_BASE_URL"; then
   warn 'PUBLIC_BASE_URL is not an HTTPS origin yet. Pride cannot safely expose account/payment APIs without HTTPS.'
   NEED_HTTPS_MAPPING=1
   MANUAL=1
@@ -318,27 +371,36 @@ if (( MANUAL )); then
   exit 78
 fi
 
-# Once the secret key + HTTPS origin exist, create the Stripe webhook automatically
-# if this Pride install does not already have a stored webhook secret.
-if [[ ! "$WEBHOOK_SECRET" =~ ^whsec_ ]]; then
-  set -a; . "$ENV_FILE"; set +a
-  set +e
-  STRIPE_RESULT="$(node "$RELEASE_DIR/scripts/configure-stripe.js" 2>&1)"
-  STRIPE_RC=$?
-  set -e
-  if (( STRIPE_RC == 0 )); then
-    NEW_WHSEC="$(printf '%s\n' "$STRIPE_RESULT" | sed -n 's/^STRIPE_WEBHOOK_SECRET=//p' | tail -n1)"
-    [[ "$NEW_WHSEC" =~ ^whsec_ ]] || die 'Stripe webhook creation succeeded without returning a webhook secret.'
-    sed -i "s|^STRIPE_WEBHOOK_SECRET=.*$|STRIPE_WEBHOOK_SECRET=$NEW_WHSEC|" "$ENV_FILE"
-    WEBHOOK_SECRET="$NEW_WHSEC"
-    ok 'Created and stored the Stripe webhook endpoint secret automatically.'
-  elif (( STRIPE_RC == 2 )); then
-    warn "$STRIPE_RESULT"
-    die 'A Stripe webhook already exists for this URL but its signing secret is not stored locally. Create a new endpoint or place its whsec_ secret in /etc/pride-bank/server.env.'
+# Create or reconcile the Pride Stripe webhook after one exact HTTPS mapping is
+# proven. Store both endpoint id and signing secret so later path/host changes can
+# update the same endpoint without losing the signing secret.
+set -a; . "$ENV_FILE"; set +a
+set +e
+STRIPE_RESULT="$(node "$RELEASE_DIR/scripts/configure-stripe.js" 2>&1)"
+STRIPE_RC=$?
+set -e
+if (( STRIPE_RC == 0 )); then
+  NEW_WHSEC="$(printf '%s\n' "$STRIPE_RESULT" | sed -n 's/^STRIPE_WEBHOOK_SECRET=//p' | tail -n1)"
+  NEW_WEBHOOK_ID="$(printf '%s\n' "$STRIPE_RESULT" | sed -n 's/^STRIPE_WEBHOOK_ID=//p' | tail -n1)"
+  [[ "$NEW_WHSEC" =~ ^whsec_ ]] || die 'Stripe webhook setup succeeded without a usable signing secret.'
+  [[ "$NEW_WEBHOOK_ID" =~ ^we_ ]] || die 'Stripe webhook setup succeeded without a usable endpoint id.'
+  sed -i "s|^STRIPE_WEBHOOK_SECRET=.*$|STRIPE_WEBHOOK_SECRET=$NEW_WHSEC|" "$ENV_FILE"
+  if grep -q '^STRIPE_WEBHOOK_ID=' "$ENV_FILE"; then
+    sed -i "s|^STRIPE_WEBHOOK_ID=.*$|STRIPE_WEBHOOK_ID=$NEW_WEBHOOK_ID|" "$ENV_FILE"
   else
-    printf '%s\n' "$STRIPE_RESULT" >&2
-    die 'Stripe webhook provisioning failed.'
+    printf 'STRIPE_WEBHOOK_ID=%s\n' "$NEW_WEBHOOK_ID" >> "$ENV_FILE"
   fi
+  WEBHOOK_SECRET="$NEW_WHSEC"
+  WEBHOOK_ID="$NEW_WEBHOOK_ID"
+  ok 'Stripe webhook endpoint is configured and its signing secret is stored root-only.'
+elif (( STRIPE_RC == 2 )); then
+  warn "$STRIPE_RESULT"
+  rollback_nginx_mapping
+  die 'A Stripe webhook exists but its signing secret is not available locally. The nginx change was rolled back; no endpoint secret was guessed.'
+else
+  printf '%s\n' "$STRIPE_RESULT" >&2
+  rollback_nginx_mapping
+  die 'Stripe webhook provisioning failed; nginx mapping was rolled back when changed by this release.'
 fi
 
 # Install/update only Pride's service unit, with backup if it already exists.
@@ -368,8 +430,17 @@ sleep 1
 if ! curl --fail --silent http://127.0.0.1:4317/healthz >/dev/null; then
   journalctl -u pride-blocks.service -n 100 --no-pager >&2 || true
   if [[ -n "$PREVIOUS" ]]; then ln -sfn "$PREVIOUS" "$CURRENT_LINK"; systemctl restart pride-blocks.service || true; fi
-  die 'Pride API health check failed; previous release was restored when available.'
+  rollback_nginx_mapping
+  die 'Pride API health check failed; previous release and nginx mapping were restored when available.'
 fi
+PUBLIC_HEALTH_URL="${PUBLIC_BASE_URL%/}/api/healthz"
+if ! curl --fail --silent --show-error --max-time 10 "$PUBLIC_HEALTH_URL" >/dev/null; then
+  journalctl -u pride-blocks.service -n 100 --no-pager >&2 || true
+  if [[ -n "$PREVIOUS" ]]; then ln -sfn "$PREVIOUS" "$CURRENT_LINK"; systemctl restart pride-blocks.service || true; fi
+  rollback_nginx_mapping
+  die "Pride API is healthy locally but not through the proven HTTPS route $PUBLIC_HEALTH_URL; nginx mapping was rolled back."
+fi
+ok "Pride API HTTPS route verified: $PUBLIC_HEALTH_URL"
 chown -R pride-bank:pride-bank "$STATE_DIR"
 chmod 750 "$STATE_DIR"
 ok 'Pride API is healthy on 127.0.0.1:4317.'

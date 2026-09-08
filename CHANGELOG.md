@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.5] - 2026-09-08
+
+- Discover Pride's existing HTTPS nginx mapping from the effective `nginx -T` configuration instead of grepping for a literal webroot path.
+- Prove the mapping with a temporary random file under the Pride public root before changing nginx.
+- Support Pride being mounted below an HTTPS path prefix as well as at a dedicated virtual-host root.
+- Configure the API location at the proven public prefix and keep nginx changes additive, backed up, validated, reload-only, and rollback-safe.
+- Preserve the existing live/test Stripe credentials and continue bootstrap automatically once one exact HTTPS mapping is proven.
+
 ## [0.3.4] - 2026-09-08
 
 - Repair Pride-only PostgreSQL `public` schema ownership before migrations on upgraded PostgreSQL 14/legacy clusters.
