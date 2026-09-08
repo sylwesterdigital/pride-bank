@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.3] - 2026-09-08
+
+- Fixed Ubuntu migration execution when `/opt/pride-bank` is intentionally inaccessible to the `postgres` OS user: root now streams SQL over stdin to `psql` instead of asking PostgreSQL to open release files directly.
+- Fixed Pride-only pre-migration backups for the same isolation model by streaming `pg_dump` output into the root-owned backup directory.
+- Added a PostgreSQL subprocess wrapper that runs from `/` with a neutral `C.UTF-8` locale, removing inherited working-directory and locale warnings without changing host locale configuration.
+- Prevented `/etc/os-release` from overwriting the Pride release version; Ubuntu inventory and Pride release version are now separate variables.
+- Fixed runtime permissions so the dedicated `pride-bank` service account can traverse/read only the root-owned Pride application tree while unrelated local users cannot.
+- Added a pre-activation service-user readability check and safer collision checks for the dedicated OS service identity.
+- Fixed Stripe webhook retry semantics so an event is considered duplicate only after successful processing; failed/crashed settlement attempts can be reclaimed safely without double-crediting.
+- Added explicit partial-refund containment: partial Stripe refunds freeze the affected account for reconciliation instead of silently leaving the full Blocks top-up spendable.
+- Recovery is idempotent from the observed partial v0.3.2 state: already-applied migrations are skipped and only pending migrations continue.
+
 ## [0.3.2] - 2026-09-08
 
 - Added shared-Ubuntu-safe bootstrap: inspect first, install only genuinely missing fresh-host prerequisites, and never rewrite PostgreSQL global configuration.

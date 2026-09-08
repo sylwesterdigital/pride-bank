@@ -3,7 +3,7 @@ import Stripe from 'stripe';
 import { config } from './config.js';
 import { pool, tx } from './db.js';
 
-export const stripe = new Stripe(config.stripeSecretKey, { appInfo: { name: 'Pride Blocks', version: '0.3.2' } });
+export const stripe = new Stripe(config.stripeSecretKey, { appInfo: { name: 'Pride Blocks', version: '0.3.3' } });
 
 export const packages = Object.freeze([
   { id: 'blocks_500_gbp', blocks: 500, amount: 500, currency: 'gbp', label: '500 Blocks' },
@@ -72,8 +72,32 @@ export async function topUpStatus(userId, topupId) {
 
 export async function handleStripeWebhook(rawBody, signature) {
   const event = stripe.webhooks.constructEvent(rawBody, signature, config.stripeWebhookSecret);
-  const inserted = await pool.query(`INSERT INTO stripe_webhook_events (stripe_event_id,event_type) VALUES ($1,$2) ON CONFLICT DO NOTHING RETURNING id`, [event.id,event.type]);
-  if (!inserted.rowCount) return { duplicate: true };
+
+  // Record receipt idempotently, then atomically claim only an unprocessed event.
+  // A stale claim may be reclaimed after five minutes so a process crash cannot
+  // permanently suppress Stripe's later retries.
+  await pool.query(
+    `INSERT INTO stripe_webhook_events (stripe_event_id,event_type)
+     VALUES ($1,$2) ON CONFLICT (stripe_event_id) DO NOTHING`,
+    [event.id,event.type]
+  );
+  const claimed = await pool.query(
+    `UPDATE stripe_webhook_events
+        SET processing_started_at=now(), processing_error=NULL,
+            processing_attempts=processing_attempts+1
+      WHERE stripe_event_id=$1
+        AND processed_at IS NULL
+        AND (processing_started_at IS NULL OR processing_started_at < now() - interval '5 minutes')
+      RETURNING id`,
+    [event.id]
+  );
+  if (!claimed.rowCount) {
+    const state = await pool.query(
+      `SELECT processed_at,processing_started_at FROM stripe_webhook_events WHERE stripe_event_id=$1`,
+      [event.id]
+    );
+    return { duplicate: Boolean(state.rows[0]?.processed_at), inProgress: !state.rows[0]?.processed_at };
+  }
 
   try {
     if (event.type === 'payment_intent.succeeded') await settleSuccessfulPayment(event.data.object);
@@ -81,11 +105,21 @@ export async function handleStripeWebhook(rawBody, signature) {
       await pool.query(`UPDATE stripe_topups SET status=$2, updated_at=now() WHERE stripe_payment_intent_id=$1 AND status='pending'`, [event.data.object.id, event.type === 'payment_intent.canceled' ? 'canceled' : 'failed']);
     }
     if (event.type === 'charge.dispute.created') await freezeForCharge(event.data.object, 'stripe_dispute');
-    if (event.type === 'charge.refunded') await reverseRefundedCharge(event.data.object);
-    await pool.query(`UPDATE stripe_webhook_events SET processed_at=now() WHERE stripe_event_id=$1`, [event.id]);
-    return { duplicate: false };
+    if (event.type === 'charge.refunded') await handleRefundedCharge(event.data.object);
+    await pool.query(
+      `UPDATE stripe_webhook_events
+          SET processed_at=now(), processing_started_at=NULL, processing_error=NULL
+        WHERE stripe_event_id=$1`,
+      [event.id]
+    );
+    return { duplicate: false, inProgress: false };
   } catch (error) {
-    await pool.query(`UPDATE stripe_webhook_events SET processing_error=$2 WHERE stripe_event_id=$1`, [event.id, String(error.message || error).slice(0,1000)]);
+    await pool.query(
+      `UPDATE stripe_webhook_events
+          SET processing_started_at=NULL, processing_error=$2
+        WHERE stripe_event_id=$1`,
+      [event.id, String(error.message || error).slice(0,1000)]
+    );
     throw error;
   }
 }
@@ -111,9 +145,18 @@ async function freezeForCharge(charge, reason) {
   await pool.query(`INSERT INTO account_security_events (user_id,kind,reference) SELECT user_id,$2,$1 FROM stripe_topups WHERE stripe_payment_intent_id=$1 ON CONFLICT DO NOTHING`, [piId,reason]);
 }
 
-async function reverseRefundedCharge(charge) {
+async function handleRefundedCharge(charge) {
   const piId = typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
-  if (!piId || !charge.refunded) return;
+  if (!piId || Number(charge.amount_refunded || 0) <= 0) return;
+
+  // Full refunds reverse the complete Blocks top-up. Partial refunds are not
+  // converted proportionally without an explicit product rule; freeze the
+  // account for reconciliation so fully spendable Blocks cannot remain unnoticed.
+  if (!charge.refunded) {
+    await freezeForCharge(charge, 'stripe_partial_refund');
+    return;
+  }
+
   await tx(async client => {
     const r = await client.query(`SELECT * FROM stripe_topups WHERE stripe_payment_intent_id=$1 FOR UPDATE`, [piId]);
     if (!r.rowCount || r.rows[0].status === 'refunded') return;

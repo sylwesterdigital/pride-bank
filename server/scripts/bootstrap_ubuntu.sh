@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
-VERSION="${PB_VERSION:?PB_VERSION missing}"
+# Use a neutral locale for subprocesses without changing host locale configuration.
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+unset LANGUAGE LC_CTYPE 2>/dev/null || true
+RELEASE_VERSION="${PB_VERSION:?PB_VERSION missing}"
 SOURCE_DIR="${PB_SOURCE_DIR:?PB_SOURCE_DIR missing}"
 PUBLIC_ROOT="${PB_PUBLIC_ROOT:-/var/www/mojoworks/labs/bank}"
 APP_ROOT=/opt/pride-bank
-RELEASE_DIR="$APP_ROOT/releases/$VERSION"
+RELEASE_DIR="$APP_ROOT/releases/$RELEASE_VERSION"
 CURRENT_LINK="$APP_ROOT/current"
 ETC_DIR=/etc/pride-bank
 STATE_DIR=/var/lib/pride-bank
@@ -22,13 +26,21 @@ ok(){ printf '✓ %s\n' "$*"; }
 warn(){ printf 'WARNING: %s\n' "$*" >&2; }
 die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+# PostgreSQL commands always run from / so the postgres OS user never needs
+# traverse access to the root-owned application release tree. stdin remains
+# available for streamed SQL and pg_dump output is captured by the root shell.
+as_postgres(){ ( cd / && runuser -u postgres -- "$@" ); }
+
 if [[ "$(id -u)" -ne 0 ]]; then die "bootstrap_ubuntu.sh must run as root (the release script uses root or sudo -n)."; fi
 [[ -r /etc/os-release ]] || die '/etc/os-release missing'
 . /etc/os-release
 [[ "${ID:-}" == ubuntu ]] || die "Refusing automatic host bootstrap on non-Ubuntu system: ${PRETTY_NAME:-unknown}"
 command -v systemctl >/dev/null || die 'systemd is required'
 mkdir -p "$ETC_DIR" "$STATE_DIR" "$BACKUP_DIR/postgres" "$BACKUP_DIR/nginx" "$APP_ROOT/releases"
-chmod 750 "$ETC_DIR" "$STATE_DIR" "$BACKUP_DIR" "$BACKUP_DIR/postgres" "$BACKUP_DIR/nginx" "$APP_ROOT" "$APP_ROOT/releases"
+chmod 750 "$ETC_DIR" "$STATE_DIR" "$BACKUP_DIR" "$BACKUP_DIR/postgres" "$BACKUP_DIR/nginx"
+# /opt/pride-bank is application source, not secret material. Keep it root-owned
+# but group-readable/traversable by only the dedicated service account.
+chmod 750 "$APP_ROOT" "$APP_ROOT/releases"
 
 log 'Host inventory (read-only)'
 printf 'Host: %s\n' "$(hostname -f 2>/dev/null || hostname)"
@@ -68,33 +80,53 @@ if ! command -v psql >/dev/null 2>&1; then
   PG_NEW=1
 fi
 command -v pg_isready >/dev/null || die 'pg_isready missing after PostgreSQL check'
-if ! runuser -u postgres -- psql -Atqc 'select current_database()' postgres >/dev/null 2>&1; then
+if ! as_postgres psql -Atqc 'select current_database()' postgres >/dev/null 2>&1; then
   if (( PG_NEW )); then
     systemctl enable --now postgresql
   else
     die 'PostgreSQL is installed but the existing local cluster is not accepting local postgres connections. Refusing to start/change an existing cluster automatically.'
   fi
 fi
-runuser -u postgres -- psql -Atqc 'select version()' postgres >/dev/null || die 'Local PostgreSQL safety check failed'
+as_postgres psql -Atqc 'select version()' postgres >/dev/null || die 'Local PostgreSQL safety check failed'
 ok 'Existing/local PostgreSQL cluster is healthy; no global PostgreSQL configuration was changed.'
 
-if ! getent passwd pride-bank >/dev/null; then
-  useradd --system --home "$STATE_DIR" --shell /usr/sbin/nologin pride-bank
+# Dedicated service identity. On a fresh shared host, do not silently reuse an
+# unrelated pre-existing account with the same name.
+if getent passwd pride-bank >/dev/null; then
+  PB_HOME="$(getent passwd pride-bank | cut -d: -f6)"
+  PB_SHELL="$(getent passwd pride-bank | cut -d: -f7)"
+  if [[ ! -f "$STATE_DIR/managed" && ( "$PB_HOME" != "$STATE_DIR" || "$PB_SHELL" != /usr/sbin/nologin ) ]]; then
+    die "OS user pride-bank already exists with unexpected home/shell; refusing a possible shared-host account collision."
+  fi
+else
+  if ! getent group pride-bank >/dev/null; then groupadd --system pride-bank; fi
+  useradd --system --gid pride-bank --home "$STATE_DIR" --shell /usr/sbin/nologin pride-bank
   ok 'Created dedicated pride-bank service user.'
 fi
+if ! getent group pride-bank >/dev/null; then
+  groupadd --system pride-bank
+  usermod -g pride-bank pride-bank
+elif [[ "$(id -gn pride-bank)" != pride-bank ]]; then
+  # This user is Pride-managed at this point; normalize only its own primary group.
+  usermod -g pride-bank pride-bank
+fi
+chown root:pride-bank "$APP_ROOT" "$APP_ROOT/releases"
+chmod 750 "$APP_ROOT" "$APP_ROOT/releases"
+chown pride-bank:pride-bank "$STATE_DIR"
+chmod 750 "$STATE_DIR"
 
 # Detect collisions before touching app-specific DB resources. Pride uses a NOLOGIN
 # owner role so the network-facing API role never owns ledger tables/functions.
-ROLE_EXISTS="$(runuser -u postgres -- psql -Atqc "select 1 from pg_roles where rolname='pride_app'" postgres || true)"
-OWNER_ROLE_EXISTS="$(runuser -u postgres -- psql -Atqc "select 1 from pg_roles where rolname='pride_owner'" postgres || true)"
-DB_OWNER="$(runuser -u postgres -- psql -Atqc "select pg_catalog.pg_get_userbyid(datdba) from pg_database where datname='pride_bank'" postgres || true)"
+ROLE_EXISTS="$(as_postgres psql -Atqc "select 1 from pg_roles where rolname='pride_app'" postgres || true)"
+OWNER_ROLE_EXISTS="$(as_postgres psql -Atqc "select 1 from pg_roles where rolname='pride_owner'" postgres || true)"
+DB_OWNER="$(as_postgres psql -Atqc "select pg_catalog.pg_get_userbyid(datdba) from pg_database where datname='pride_bank'" postgres || true)"
 if [[ -n "$DB_OWNER" && "$DB_OWNER" != pride_app && "$DB_OWNER" != pride_owner ]]; then die "Database pride_bank exists but is owned by '$DB_OWNER'; refusing to modify a possible unrelated database."; fi
 if [[ -n "$ROLE_EXISTS" && -z "$DB_OWNER" && ! -f "$STATE_DIR/managed" ]]; then die "PostgreSQL role pride_app exists but pride_bank database does not; refusing a possible naming collision."; fi
 if [[ -n "$OWNER_ROLE_EXISTS" && -z "$DB_OWNER" && ! -f "$STATE_DIR/managed" ]]; then die "PostgreSQL role pride_owner exists but pride_bank database does not; refusing a possible naming collision."; fi
 install -m 0600 /dev/null "$STATE_DIR/managed"
 
 if [[ -z "$OWNER_ROLE_EXISTS" ]]; then
-  runuser -u postgres -- psql -v ON_ERROR_STOP=1 postgres -c "CREATE ROLE pride_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;" >/dev/null
+  as_postgres psql -v ON_ERROR_STOP=1 postgres -c "CREATE ROLE pride_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;" >/dev/null
   ok 'Created isolated PostgreSQL owner role pride_owner (NOLOGIN).'
 fi
 
@@ -105,24 +137,24 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 if [[ -z "$ROLE_EXISTS" ]]; then
   DB_PASSWORD="$(openssl rand -hex 24)"
-  runuser -u postgres -- psql -v ON_ERROR_STOP=1 postgres -c "CREATE ROLE pride_app LOGIN PASSWORD '$DB_PASSWORD' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;" >/dev/null
+  as_postgres psql -v ON_ERROR_STOP=1 postgres -c "CREATE ROLE pride_app LOGIN PASSWORD '$DB_PASSWORD' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;" >/dev/null
   ok 'Created isolated PostgreSQL login role pride_app.'
 fi
 if [[ -z "$DB_OWNER" ]]; then
-  runuser -u postgres -- createdb -O pride_owner pride_bank
+  as_postgres createdb -O pride_owner pride_bank
   DB_OWNER=pride_owner
   ok 'Created isolated PostgreSQL database pride_bank owned by pride_owner.'
 elif [[ "$DB_OWNER" == pride_app ]]; then
-  runuser -u postgres -- psql -v ON_ERROR_STOP=1 postgres -c "ALTER DATABASE pride_bank OWNER TO pride_owner;" >/dev/null
+  as_postgres psql -v ON_ERROR_STOP=1 postgres -c "ALTER DATABASE pride_bank OWNER TO pride_owner;" >/dev/null
   DB_OWNER=pride_owner
   ok 'Migrated legacy Pride database ownership from login role pride_app to NOLOGIN role pride_owner.'
 fi
-runuser -u postgres -- psql -v ON_ERROR_STOP=1 postgres -c "REVOKE ALL ON DATABASE pride_bank FROM PUBLIC; GRANT CONNECT ON DATABASE pride_bank TO pride_app;" >/dev/null
+as_postgres psql -v ON_ERROR_STOP=1 postgres -c "REVOKE ALL ON DATABASE pride_bank FROM PUBLIC; GRANT CONNECT ON DATABASE pride_bank TO pride_app;" >/dev/null
 if [[ -z "$DB_PASSWORD" ]]; then
   # App-specific role/database are proven to be Pride-owned, but the old password
   # is unavailable. Rotate only this dedicated role; no shared role is touched.
   DB_PASSWORD="$(openssl rand -hex 24)"
-  runuser -u postgres -- psql -v ON_ERROR_STOP=1 postgres -c "ALTER ROLE pride_app PASSWORD '$DB_PASSWORD';" >/dev/null
+  as_postgres psql -v ON_ERROR_STOP=1 postgres -c "ALTER ROLE pride_app PASSWORD '$DB_PASSWORD';" >/dev/null
   ok 'Rotated the dedicated pride_app database password because no Pride environment password was available.'
 fi
 
@@ -150,7 +182,7 @@ else
   ok 'Preserved existing /etc/pride-bank/server.env without overwriting credentials.'
 fi
 
-log "Staging isolated backend release v$VERSION"
+log "Staging isolated backend release v$RELEASE_VERSION"
 rm -rf "$RELEASE_DIR.tmp"
 mkdir -p "$RELEASE_DIR.tmp"
 cp -a "$SOURCE_DIR"/. "$RELEASE_DIR.tmp"/
@@ -161,36 +193,38 @@ CURRENT_TARGET=""
 [[ -L "$CURRENT_LINK" ]] && CURRENT_TARGET="$(readlink -f "$CURRENT_LINK" || true)"
 if [[ -d "$RELEASE_DIR" && "$CURRENT_TARGET" == "$RELEASE_DIR" ]]; then
   rm -rf "$RELEASE_DIR.tmp"
-  ok "Release v$VERSION is already the active backend source; reusing it for retry."
+  ok "Release v$RELEASE_VERSION is already the active backend source; reusing it for retry."
 else
   rm -rf "$RELEASE_DIR"
   mv "$RELEASE_DIR.tmp" "$RELEASE_DIR"
-  chown -R root:root "$RELEASE_DIR"
-  chmod -R a+rX "$RELEASE_DIR"
 fi
+# Code is root-owned and writable only by root. The dedicated service group gets
+# read/traverse access; unrelated host users get no access through this tree.
+chown -R root:pride-bank "$RELEASE_DIR"
+chmod -R g+rX,o-rwx "$RELEASE_DIR"
 
 # Back up only Pride's database before any migration. Never dump or touch other DBs.
-if runuser -u postgres -- psql -Atqc "select to_regclass('public.users') is not null" pride_bank | grep -qx t; then
-  DUMP="$BACKUP_DIR/postgres/pride_bank-pre-v${VERSION}-$(date +%Y%m%d%H%M%S).dump"
-  runuser -u postgres -- pg_dump -Fc pride_bank -f "$DUMP"
+if as_postgres psql -Atqc "select to_regclass('public.users') is not null" pride_bank | grep -qx t; then
+  DUMP="$BACKUP_DIR/postgres/pride_bank-pre-v${RELEASE_VERSION}-$(date +%Y%m%d%H%M%S).dump"
+  as_postgres pg_dump -Fc pride_bank > "$DUMP"
   chmod 600 "$DUMP"
   ok "Backed up pride_bank to $DUMP"
 fi
 
 log 'Applying Pride-only PostgreSQL migrations as local postgres administrator'
-runuser -u postgres -- psql -v ON_ERROR_STOP=1 pride_bank -c "CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now()); ALTER TABLE schema_migrations OWNER TO pride_owner;" >/dev/null
+as_postgres psql -v ON_ERROR_STOP=1 pride_bank -c "CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now()); ALTER TABLE schema_migrations OWNER TO pride_owner;" >/dev/null
 for migration in "$RELEASE_DIR"/migrations/*.sql; do
   name="$(basename "$migration")"
-  applied="$(runuser -u postgres -- psql -Atqc "select 1 from schema_migrations where name='${name//\'/\'\'}'" pride_bank || true)"
+  applied="$(as_postgres psql -Atqc "select 1 from schema_migrations where name='${name//\'/\'\'}'" pride_bank || true)"
   [[ "$applied" == 1 ]] && continue
   if [[ "$name" == 002_ledger_security.sql ]]; then
     # This migration intentionally needs postgres authority once to normalize
     # ownership from the legacy v0.3.1 layout before locking the API role down.
-    runuser -u postgres -- psql -v ON_ERROR_STOP=1 pride_bank -f "$migration" >/dev/null
+    cat "$migration" | as_postgres psql -v ON_ERROR_STOP=1 pride_bank >/dev/null
   else
-    { printf 'SET ROLE pride_owner;\n'; cat "$migration"; } | runuser -u postgres -- psql -v ON_ERROR_STOP=1 pride_bank >/dev/null
+    { printf 'SET ROLE pride_owner;\n'; cat "$migration"; } | as_postgres psql -v ON_ERROR_STOP=1 pride_bank >/dev/null
   fi
-  runuser -u postgres -- psql -v ON_ERROR_STOP=1 pride_bank -c "insert into schema_migrations(name) values ('${name//\'/\'\'}')" >/dev/null
+  as_postgres psql -v ON_ERROR_STOP=1 pride_bank -c "insert into schema_migrations(name) values ('${name//\'/\'\'}')" >/dev/null
   ok "Applied $name"
 done
 
@@ -286,6 +320,13 @@ if [[ ! "$WEBHOOK_SECRET" =~ ^whsec_ ]]; then
 fi
 
 # Install/update only Pride's service unit, with backup if it already exists.
+# Prove the runtime user can traverse/read the exact staged application before
+# changing the current symlink or touching systemd.
+if ! runuser -u pride-bank -- test -r "$RELEASE_DIR/src/index.js"; then
+  die "Dedicated pride-bank service user cannot read staged release $RELEASE_DIR/src/index.js; refusing activation."
+fi
+ok 'Dedicated service user can read/traverse the staged backend release.'
+
 log 'Activating isolated Pride backend release'
 if [[ -f "$SERVICE_FILE" ]]; then cp -a "$SERVICE_FILE" "$BACKUP_DIR/pride-blocks.service.$(date +%Y%m%d%H%M%S).bak"; fi
 install -m 0644 "$RELEASE_DIR/scripts/pride-blocks.service" "$SERVICE_FILE"
