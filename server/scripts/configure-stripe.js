@@ -3,9 +3,14 @@ const secret=(process.env.STRIPE_SECRET_KEY||'').trim();
 const base=(process.env.PUBLIC_BASE_URL||'').trim().replace(/\/$/,'');
 const storedSecret=(process.env.STRIPE_WEBHOOK_SECRET||'').trim();
 const storedId=(process.env.STRIPE_WEBHOOK_ID||'').trim();
+const storedAccountId=(process.env.STRIPE_ACCOUNT_ID||'').trim();
+const releaseVersion=(process.env.PRIDE_RELEASE_VERSION||'0.3.8').trim();
 if (!/^sk_(test|live)_/.test(secret)) throw new Error('STRIPE_SECRET_KEY is not configured');
 if (!/^https:\/\//.test(base)) throw new Error('PUBLIC_BASE_URL must be HTTPS before Stripe webhook setup');
-const stripe=new Stripe(secret,{appInfo:{name:'Pride Blocks bootstrap',version:'0.3.6'}});
+const stripe=new Stripe(secret,{appInfo:{name:'Pride Blocks bootstrap',version:releaseVersion}});
+const account=await stripe.accounts.retrieve();
+if (storedAccountId && storedAccountId !== 'CHANGE_ME' && storedAccountId !== account.id) throw new Error(`Stripe account ID mismatch: stored ${storedAccountId}, key belongs to ${account.id}`);
+console.log(`STRIPE_ACCOUNT_ID=${account.id}`);
 const url=`${base}/api/v1/stripe/webhook`;
 const events=['payment_intent.succeeded','payment_intent.payment_failed','payment_intent.canceled','charge.dispute.created','charge.refunded'];
 

@@ -199,6 +199,7 @@ else
 fi
 [[ -r "$ENV_TOOL" ]] || die "Safe environment parser missing from staged release: $ENV_TOOL"
 python3 "$ENV_TOOL" normalize "$ENV_FILE" >/dev/null
+printf '%s\n' "$RELEASE_VERSION" | python3 "$ENV_TOOL" set-stdin "$ENV_FILE" PRIDE_RELEASE_VERSION
 chown root:root "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 ok 'Validated and normalized Pride server environment as data (never executed as shell code).'
@@ -258,9 +259,11 @@ for migration in "$RELEASE_DIR"/migrations/*.sql; do
   ok "Applied $name atomically"
 done
 
-# Integrate only with an existing HTTPS nginx mapping that can be proven by an
-# actual temporary file served from Pride's public root. This avoids guessing
-# from filesystem strings in config files and supports inherited roots / aliases.
+# Reconcile only with an existing HTTPS nginx mapping that can be proven by an
+# actual temporary file served from Pride's public root. A previous failed Pride
+# deployment may have left our managed include in the site while its snippet was
+# removed by an older rollback bug; repair that exact Pride-owned condition first
+# so nginx -T can safely inspect the effective configuration.
 PUBLIC_BASE_URL="$(python3 "$ENV_TOOL" get "$ENV_FILE" PUBLIC_BASE_URL 2>/dev/null || true)"
 ORIGINAL_PUBLIC_BASE_URL="$PUBLIC_BASE_URL"
 NGINX_SITE_FILE=''
@@ -268,90 +271,136 @@ NGINX_BACKUP=''
 NGINX_CHANGED=0
 SNIPPET_EXISTED=0
 SNIPPET_BACKUP=''
+SNIPPET_TOUCHED=0
+SNIPPET_BASELINE_RECOVERED=0
 is_https_base(){ [[ "$1" =~ ^https://[^/[:space:]]+(/[^[:space:]?#]*)?$ ]]; }
-if ! is_https_base "$PUBLIC_BASE_URL"; then
-  if command -v nginx >/dev/null 2>&1; then
-    set +e
-    DISCOVERY_ARGS=(--root "$PUBLIC_ROOT")
-    if is_https_base "$PREFERRED_PUBLIC_URL"; then
-      DISCOVERY_ARGS+=(--preferred-base-url "$PREFERRED_PUBLIC_URL")
-      printf 'Preferred canonical Pride URL: %s\n' "$PREFERRED_PUBLIC_URL"
-    fi
-    DISCOVERY="$(python3 "$RELEASE_DIR/scripts/discover_nginx.py" "${DISCOVERY_ARGS[@]}" 2>&1)"
-    DISCOVERY_RC=$?
-    set -e
-    if (( DISCOVERY_RC == 0 )); then
-      printf '%s\n' "$DISCOVERY"
-      NGINX_SITE_FILE="$(printf '%s\n' "$DISCOVERY" | sed -n 's/^SITE_FILE=//p' | tail -n1)"
-      SERVER_NAME="$(printf '%s\n' "$DISCOVERY" | sed -n 's/^SERVER_NAME=//p' | tail -n1)"
-      BASE_PATH="$(printf '%s\n' "$DISCOVERY" | sed -n 's/^BASE_PATH=//p' | tail -n1)"
-      DISCOVERED="$(printf '%s\n' "$DISCOVERY" | sed -n 's/^PUBLIC_BASE_URL=//p' | tail -n1)"
-      [[ -n "$NGINX_SITE_FILE" && -f "$NGINX_SITE_FILE" ]] || die 'nginx discovery returned an invalid source config file.'
-      [[ "$SERVER_NAME" =~ ^[A-Za-z0-9.-]+$ ]] || die 'nginx discovery returned an invalid server_name.'
-      [[ "$BASE_PATH" == /* ]] || die 'nginx discovery returned an invalid public base path.'
-      is_https_base "$DISCOVERED" || die 'nginx discovery returned an invalid HTTPS public URL.'
+api_path_for_base(){
+  python3 - "$1" <<'PYURL'
+import sys
+from urllib.parse import urlsplit
+u=urlsplit(sys.argv[1])
+p=(u.path or '').rstrip('/')
+print((p if p else '') + '/api/')
+PYURL
+}
+write_snippet_for_base(){
+  local base="$1" api_path
+  api_path="$(api_path_for_base "$base")"
+  [[ "$api_path" == /api/ || "$api_path" == /*/api/ ]] || die "Refusing invalid Pride API path derived from $base"
+  install -d -m 0755 "$(dirname "$SNIPPET")"
+  sed "s|^location /api/ {|location $api_path {|" "$RELEASE_DIR/scripts/nginx-location.conf" > "$SNIPPET.tmp"
+  install -m 0644 "$SNIPPET.tmp" "$SNIPPET"
+  rm -f "$SNIPPET.tmp"
+}
 
-      # Generate a Pride-only location snippet at the proven mounted path.
-      if [[ "$BASE_PATH" == / ]]; then API_PATH='/api/'; else API_PATH="${BASE_PATH%/}/api/"; fi
-      install -d -m 0755 "$(dirname "$SNIPPET")"
-      if [[ -f "$SNIPPET" ]]; then
-        SNIPPET_EXISTED=1
-        SNIPPET_BACKUP="$BACKUP_DIR/nginx/pride-bank-api.conf.$(date +%Y%m%d%H%M%S).bak"
-        cp -a "$SNIPPET" "$SNIPPET_BACKUP"
-      fi
-      sed "s|^location /api/ {|location $API_PATH {|" "$RELEASE_DIR/scripts/nginx-location.conf" > "$SNIPPET.tmp"
-      install -m 0644 "$SNIPPET.tmp" "$SNIPPET"
-      rm -f "$SNIPPET.tmp"
-
-      set +e
-      NGINX_RESULT="$(python3 "$RELEASE_DIR/scripts/configure_nginx.py" --site "$NGINX_SITE_FILE" --server-name "$SERVER_NAME" --snippet "$SNIPPET" --backup-dir "$BACKUP_DIR/nginx" 2>&1)"
-      NGINX_RC=$?
-      set -e
-      if (( NGINX_RC == 0 )); then
-        printf '%s\n' "$NGINX_RESULT"
-        NGINX_BACKUP="$(printf '%s\n' "$NGINX_RESULT" | sed -n 's/^BACKUP=//p' | tail -n1)"
-        if nginx -t; then
-          if systemctl reload nginx; then
-            printf '%s\n' "$DISCOVERED" | python3 "$ENV_TOOL" set-stdin "$ENV_FILE" PUBLIC_BASE_URL
-            PUBLIC_BASE_URL="$DISCOVERED"
-            [[ -n "$NGINX_BACKUP" ]] && NGINX_CHANGED=1
-            ok "Added Pride API route to the single HTTPS nginx mapping proven by a live file probe: $DISCOVERED (reload only)."
-          else
-            [[ -n "$NGINX_BACKUP" ]] && cp -a "$NGINX_BACKUP" "$NGINX_SITE_FILE"
-            nginx -t && systemctl reload nginx || true
-            die 'nginx reload failed; original site file was restored.'
-          fi
-        else
-          [[ -n "$NGINX_BACKUP" ]] && cp -a "$NGINX_BACKUP" "$NGINX_SITE_FILE"
-          nginx -t || true
-          die 'nginx validation failed; original site file was restored.'
-        fi
+if command -v nginx >/dev/null 2>&1; then
+  # Recover only our exact managed include if an older failed release removed the
+  # snippet. This changes no server block and no unrelated nginx file.
+  if [[ ! -f "$SNIPPET" ]]; then
+    PRIDE_INCLUDE_COUNT="$( { grep -RFl -- "include $SNIPPET;" /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null || true; } | wc -l | tr -d '[:space:]')"
+    if [[ "$PRIDE_INCLUDE_COUNT" != 0 ]]; then
+      RECOVERY_BASE="$PUBLIC_BASE_URL"
+      if ! is_https_base "$RECOVERY_BASE"; then RECOVERY_BASE="$PREFERRED_PUBLIC_URL"; fi
+      is_https_base "$RECOVERY_BASE" || die "A Pride-managed nginx include exists but its snippet is missing and no proven HTTPS Pride URL is available to reconstruct it."
+      write_snippet_for_base "$RECOVERY_BASE"
+      if nginx -t >/dev/null 2>&1; then
+        SNIPPET_BASELINE_RECOVERED=1
+        ok 'Recovered missing Pride nginx snippet left by an older failed release; nginx configuration is valid again.'
       else
-        warn "$NGINX_RESULT"
-        warn 'The proven nginx source block could not be modified safely; no persistent public URL was recorded.'
-        MANUAL=1
+        rm -f "$SNIPPET"
+        die 'A Pride-managed nginx include references a missing snippet, but reconstructing the snippet did not produce a valid nginx configuration.'
+      fi
+    fi
+  fi
+
+  # Always re-prove the mapping. A stored URL is a preference, never authority.
+  DISCOVERY_ARGS=(--root "$PUBLIC_ROOT")
+  if is_https_base "$PUBLIC_BASE_URL"; then
+    DISCOVERY_ARGS+=(--preferred-base-url "$PUBLIC_BASE_URL")
+    printf 'Stored canonical Pride URL: %s\n' "$PUBLIC_BASE_URL"
+  elif is_https_base "$PREFERRED_PUBLIC_URL"; then
+    DISCOVERY_ARGS+=(--preferred-base-url "$PREFERRED_PUBLIC_URL")
+    printf 'Preferred canonical Pride URL: %s\n' "$PREFERRED_PUBLIC_URL"
+  fi
+  set +e
+  DISCOVERY="$(python3 "$RELEASE_DIR/scripts/discover_nginx.py" "${DISCOVERY_ARGS[@]}" 2>&1)"
+  DISCOVERY_RC=$?
+  set -e
+  if (( DISCOVERY_RC == 0 )); then
+    printf '%s\n' "$DISCOVERY"
+    NGINX_SITE_FILE="$(printf '%s\n' "$DISCOVERY" | sed -n 's/^SITE_FILE=//p' | tail -n1)"
+    SERVER_NAME="$(printf '%s\n' "$DISCOVERY" | sed -n 's/^SERVER_NAME=//p' | tail -n1)"
+    BASE_PATH="$(printf '%s\n' "$DISCOVERY" | sed -n 's/^BASE_PATH=//p' | tail -n1)"
+    DISCOVERED="$(printf '%s\n' "$DISCOVERY" | sed -n 's/^PUBLIC_BASE_URL=//p' | tail -n1)"
+    [[ -n "$NGINX_SITE_FILE" && -f "$NGINX_SITE_FILE" ]] || die 'nginx discovery returned an invalid source config file.'
+    [[ "$SERVER_NAME" =~ ^[A-Za-z0-9.-]+$ ]] || die 'nginx discovery returned an invalid server_name.'
+    [[ "$BASE_PATH" == /* ]] || die 'nginx discovery returned an invalid public base path.'
+    is_https_base "$DISCOVERED" || die 'nginx discovery returned an invalid HTTPS public URL.'
+
+    install -d -m 0755 "$(dirname "$SNIPPET")"
+    if [[ -f "$SNIPPET" ]]; then
+      SNIPPET_EXISTED=1
+      SNIPPET_BACKUP="$BACKUP_DIR/nginx/pride-bank-api.conf.$(date +%Y%m%d%H%M%S).bak"
+      cp -a "$SNIPPET" "$SNIPPET_BACKUP"
+    fi
+    write_snippet_for_base "$DISCOVERED"
+    SNIPPET_TOUCHED=1
+
+    set +e
+    NGINX_RESULT="$(python3 "$RELEASE_DIR/scripts/configure_nginx.py" --site "$NGINX_SITE_FILE" --server-name "$SERVER_NAME" --snippet "$SNIPPET" --backup-dir "$BACKUP_DIR/nginx" 2>&1)"
+    NGINX_RC=$?
+    set -e
+    if (( NGINX_RC == 0 )); then
+      printf '%s\n' "$NGINX_RESULT"
+      NGINX_BACKUP="$(printf '%s\n' "$NGINX_RESULT" | sed -n 's/^BACKUP=//p' | tail -n1)"
+      [[ -n "$NGINX_BACKUP" ]] && NGINX_CHANGED=1
+      if nginx -t; then
+        if (( NGINX_CHANGED || SNIPPET_TOUCHED )); then
+          systemctl reload nginx || die 'nginx reload failed after Pride-only API reconciliation.'
+        fi
+        printf '%s\n' "$DISCOVERED" | python3 "$ENV_TOOL" set-stdin "$ENV_FILE" PUBLIC_BASE_URL
+        PUBLIC_BASE_URL="$DISCOVERED"
+        ok "Verified Pride API nginx route on the single HTTPS mapping proven by a live file probe: $DISCOVERED (reload only)."
+      else
+        [[ -n "$NGINX_BACKUP" ]] && cp -a "$NGINX_BACKUP" "$NGINX_SITE_FILE"
+        if (( SNIPPET_EXISTED )) && [[ -n "$SNIPPET_BACKUP" ]]; then cp -a "$SNIPPET_BACKUP" "$SNIPPET"; elif (( ! SNIPPET_BASELINE_RECOVERED )); then rm -f "$SNIPPET"; fi
+        nginx -t || true
+        die 'nginx validation failed; Pride-only files were restored where possible.'
       fi
     else
-      warn "$DISCOVERY"
-      warn 'Could not prove exactly one HTTPS mapping for the Pride public root. No nginx files were modified.'
+      warn "$NGINX_RESULT"
+      warn 'The proven nginx source block could not be modified safely; no persistent public URL was recorded.'
       MANUAL=1
     fi
   else
-    warn 'nginx is not installed. Pride will not install/take over a web server on a shared host without an existing HTTPS site.'
+    warn "$DISCOVERY"
+    warn 'Could not prove exactly one HTTPS mapping for the Pride public root. No nginx server block was modified.'
     MANUAL=1
   fi
+else
+  warn 'nginx is not installed. Pride will not install/take over a web server on a shared host without an existing HTTPS site.'
+  MANUAL=1
 fi
 
 rollback_nginx_mapping(){
+  # Roll back only files this invocation actually changed. Never remove a
+  # pre-existing/recovered Pride snippet merely because a later app health check
+  # failed; doing so can make the host's nginx configuration invalid on disk.
   if (( NGINX_CHANGED )) && [[ -n "$NGINX_BACKUP" && -n "$NGINX_SITE_FILE" ]]; then
     cp -a "$NGINX_BACKUP" "$NGINX_SITE_FILE"
   fi
-  if (( SNIPPET_EXISTED )) && [[ -n "$SNIPPET_BACKUP" ]]; then
-    cp -a "$SNIPPET_BACKUP" "$SNIPPET"
-  elif (( ! SNIPPET_EXISTED )); then
-    rm -f "$SNIPPET"
+  if (( SNIPPET_TOUCHED )); then
+    if (( SNIPPET_EXISTED )) && [[ -n "$SNIPPET_BACKUP" ]]; then
+      cp -a "$SNIPPET_BACKUP" "$SNIPPET"
+    elif (( ! SNIPPET_BASELINE_RECOVERED )); then
+      rm -f "$SNIPPET"
+    fi
   fi
-  nginx -t && systemctl reload nginx || true
+  if nginx -t >/dev/null 2>&1; then
+    systemctl reload nginx || true
+  else
+    warn 'Rollback left nginx validation failing; Pride will not reload an invalid configuration.'
+  fi
   if [[ -n "$ORIGINAL_PUBLIC_BASE_URL" ]]; then
     printf '%s\n' "$ORIGINAL_PUBLIC_BASE_URL" | python3 "$ENV_TOOL" set-stdin "$ENV_FILE" PUBLIC_BASE_URL
   else
@@ -392,11 +441,13 @@ STRIPE_RESULT="$(python3 "$ENV_TOOL" exec "$ENV_FILE" -- node "$RELEASE_DIR/scri
 STRIPE_RC=$?
 set -e
 if (( STRIPE_RC == 0 )); then
+  NEW_ACCOUNT_ID="$(printf '%s\n' "$STRIPE_RESULT" | sed -n 's/^STRIPE_ACCOUNT_ID=//p' | tail -n1)"
   NEW_WHSEC="$(printf '%s\n' "$STRIPE_RESULT" | sed -n 's/^STRIPE_WEBHOOK_SECRET=//p' | tail -n1)"
   NEW_WEBHOOK_ID="$(printf '%s\n' "$STRIPE_RESULT" | sed -n 's/^STRIPE_WEBHOOK_ID=//p' | tail -n1)"
+  [[ "$NEW_ACCOUNT_ID" =~ ^acct_ ]] || die 'Stripe setup succeeded without a usable account id.'
   [[ "$NEW_WHSEC" =~ ^whsec_ ]] || die 'Stripe webhook setup succeeded without a usable signing secret.'
   [[ "$NEW_WEBHOOK_ID" =~ ^we_ ]] || die 'Stripe webhook setup succeeded without a usable endpoint id.'
-  printf 'STRIPE_WEBHOOK_SECRET=%s\nSTRIPE_WEBHOOK_ID=%s\n' "$NEW_WHSEC" "$NEW_WEBHOOK_ID" | python3 "$ENV_TOOL" set-many-stdin "$ENV_FILE"
+  printf 'STRIPE_ACCOUNT_ID=%s\nSTRIPE_WEBHOOK_SECRET=%s\nSTRIPE_WEBHOOK_ID=%s\n' "$NEW_ACCOUNT_ID" "$NEW_WHSEC" "$NEW_WEBHOOK_ID" | python3 "$ENV_TOOL" set-many-stdin "$ENV_FILE"
   python3 "$ENV_TOOL" validate "$ENV_FILE" >/dev/null
   WEBHOOK_SECRET="$NEW_WHSEC"
   WEBHOOK_ID="$NEW_WEBHOOK_ID"

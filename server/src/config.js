@@ -14,6 +14,7 @@ export const config = {
   stripePublishableKey: required('STRIPE_PUBLISHABLE_KEY'),
   stripeWebhookSecret: required('STRIPE_WEBHOOK_SECRET'),
   stripeMode: process.env.STRIPE_MODE || 'test',
+  stripeAccountId: process.env.STRIPE_ACCOUNT_ID?.trim() || '',
   expectedBusinessName: process.env.STRIPE_EXPECTED_BUSINESS_NAME || 'WORKWORK.FUN LTD',
   publicBaseUrl: required('PUBLIC_BASE_URL').replace(/\/$/, ''),
   iosBlocksPurchaseRail: process.env.IOS_BLOCKS_PURCHASE_RAIL || 'stripe'

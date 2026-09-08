@@ -108,4 +108,16 @@ if grep -Eiv 'crypto\.' homepage/app.js | grep -Eiq '\b(wallet|token|coin|crypto
 if grep -Eiq '\b(wallet|token|coin|crypto|blockchain|staking|on-chain|web3|withdraw|metaverse|nft|floor price)\b' homepage/index.html PrideBank/RootView.swift; then fail "Prohibited product language found in user-facing UI"; fi
 if command -v node >/dev/null 2>&1; then node --check homepage/app.js; (cd server && npm run check --silent); fi
 if command -v swift >/dev/null 2>&1; then swiftc -parse PrideBank/PrideBankApp.swift PrideBank/AppState.swift PrideBank/SecurePINStore.swift PrideBank/SecureSessionStore.swift PrideBank/APIClient.swift PrideBank/StripeTopUpView.swift PrideBank/DesignSystem.swift PrideBank/RootView.swift >/dev/null; fi
+
+grep -Fq 'stripeAccountId' server/src/config.js || fail "Pinned Stripe account ID support missing"
+grep -Fq 'acct.id !== config.stripeAccountId' server/src/stripe.js || fail "Stripe runtime does not enforce pinned account ID"
+grep -Fq 'acct.company?.name' server/src/stripe.js || fail "Stripe legal-name verification must use company.name"
+grep -Fq 'business_profile?.name' server/src/stripe.js || fail "Stripe customer-facing profile name audit field missing"
+grep -Fq 'STRIPE_ACCOUNT_ID' server/scripts/configure-stripe.js || fail "Stripe bootstrap does not pin the account ID"
+grep -Fq 'SNIPPET_BASELINE_RECOVERED' server/scripts/bootstrap_ubuntu.sh || fail "nginx missing-snippet recovery guard missing"
+grep -Fq 'SNIPPET_TOUCHED' server/scripts/bootstrap_ubuntu.sh || fail "nginx rollback ownership tracking missing"
+grep -Fq 'grep -RFl -- "include $SNIPPET;"' server/scripts/bootstrap_ubuntu.sh || fail "nginx managed-include recovery detection missing"
+if find server -type d -name '__pycache__' -print -quit | grep -q .; then fail "Python cache directories must not be packaged"; fi
+if find server -type f -name '*.pyc' -print -quit | grep -q .; then fail "Python bytecode must not be packaged"; fi
+
 pb_success "Repository verification passed for v$VERSION"

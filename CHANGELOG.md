@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.8] - 2026-09-09
+
+- Fix Stripe merchant verification to use Stripe `company.name` for legal-name checks instead of treating the customer-facing `business_profile.name` as a legal entity name.
+- Pin the exact Stripe `acct_...` account ID in the root-only server environment and refuse later startup with credentials for a different Stripe account.
+- Recover a missing Pride nginx snippet left by the v0.3.7 rollback defect without touching unrelated nginx configuration.
+- Make nginx rollback ownership-aware so a failed app health check cannot delete a snippet it did not create.
+- Re-prove the HTTPS nginx mapping on every backend deployment instead of trusting stale `PUBLIC_BASE_URL` state.
+- Propagate the actual Pride release version into the backend runtime and Stripe app metadata.
+- Exclude and reject Python `__pycache__` / `.pyc` files from release artifacts.
+
 ## [0.3.7] - 2026-09-09
 
 - Fixed server environment handling so `/etc/pride-bank/server.env` is never executed as shell code.

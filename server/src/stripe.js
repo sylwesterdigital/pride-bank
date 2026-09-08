@@ -3,7 +3,8 @@ import Stripe from 'stripe';
 import { config } from './config.js';
 import { pool, tx } from './db.js';
 
-export const stripe = new Stripe(config.stripeSecretKey, { appInfo: { name: 'Pride Blocks', version: '0.3.6' } });
+const releaseVersion = process.env.PRIDE_RELEASE_VERSION || '0.3.8';
+export const stripe = new Stripe(config.stripeSecretKey, { appInfo: { name: 'Pride Blocks', version: releaseVersion } });
 
 export const packages = Object.freeze([
   { id: 'blocks_500_gbp', blocks: 500, amount: 500, currency: 'gbp', label: '500 Blocks' },
@@ -11,13 +12,47 @@ export const packages = Object.freeze([
   { id: 'blocks_2500_gbp', blocks: 2500, amount: 2500, currency: 'gbp', label: '2,500 Blocks' }
 ]);
 
+function normalizedCompanyName(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
 export async function verifyStripeAccount() {
   const acct = await stripe.accounts.retrieve();
-  const name = acct.business_profile?.name || acct.company?.name || acct.settings?.dashboard?.display_name || '';
-  if (config.stripeMode === 'live' && name && name.toLowerCase() !== config.expectedBusinessName.toLowerCase()) {
-    throw new Error(`Stripe account business name '${name}' does not match expected '${config.expectedBusinessName}'`);
+  const legalName = acct.company?.name || '';
+  const profileName = acct.business_profile?.name || acct.settings?.dashboard?.display_name || '';
+
+  // The Stripe account ID is the durable merchant identity. Once bootstrap has
+  // pinned it, a different live/test Stripe account must never start the API.
+  if (config.stripeAccountId && acct.id !== config.stripeAccountId) {
+    throw new Error(`Stripe account ID mismatch: configured ${config.stripeAccountId}, key belongs to ${acct.id}`);
   }
-  return { id: acct.id, livemode: config.stripeMode === 'live', businessName: name || config.expectedBusinessName };
+
+  // Stripe documents company.name as the legal company name, while
+  // business_profile.name is customer-facing branding. Only the legal field is
+  // suitable for a legal-name assertion. Some Standard accounts do not expose
+  // all company fields on retrieve, so absence is not treated as a mismatch.
+  if (config.stripeMode === 'live' && legalName) {
+    if (normalizedCompanyName(legalName) !== normalizedCompanyName(config.expectedBusinessName)) {
+      throw new Error(`Stripe legal company name '${legalName}' does not match expected '${config.expectedBusinessName}'`);
+    }
+  }
+
+  if (config.stripeMode === 'live' && acct.charges_enabled !== true) {
+    throw new Error(`Stripe account ${acct.id} is not enabled for charges`);
+  }
+
+  return {
+    id: acct.id,
+    livemode: config.stripeMode === 'live',
+    legalName: legalName || null,
+    profileName: profileName || null
+  };
 }
 
 export async function createTopUp(user, packageId, requestKey) {
@@ -72,10 +107,6 @@ export async function topUpStatus(userId, topupId) {
 
 export async function handleStripeWebhook(rawBody, signature) {
   const event = stripe.webhooks.constructEvent(rawBody, signature, config.stripeWebhookSecret);
-
-  // Record receipt idempotently, then atomically claim only an unprocessed event.
-  // A stale claim may be reclaimed after five minutes so a process crash cannot
-  // permanently suppress Stripe's later retries.
   await pool.query(
     `INSERT INTO stripe_webhook_events (stripe_event_id,event_type)
      VALUES ($1,$2) ON CONFLICT (stripe_event_id) DO NOTHING`,
@@ -148,15 +179,10 @@ async function freezeForCharge(charge, reason) {
 async function handleRefundedCharge(charge) {
   const piId = typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
   if (!piId || Number(charge.amount_refunded || 0) <= 0) return;
-
-  // Full refunds reverse the complete Blocks top-up. Partial refunds are not
-  // converted proportionally without an explicit product rule; freeze the
-  // account for reconciliation so fully spendable Blocks cannot remain unnoticed.
   if (!charge.refunded) {
     await freezeForCharge(charge, 'stripe_partial_refund');
     return;
   }
-
   await tx(async client => {
     const r = await client.query(`SELECT * FROM stripe_topups WHERE stripe_payment_intent_id=$1 FOR UPDATE`, [piId]);
     if (!r.rowCount || r.rows[0].status === 'refunded') return;

@@ -6,6 +6,8 @@ import { register, login, requireAuth, logout } from './auth.js';
 import { balanceFor, activityFor, transferBlocks } from './ledger.js';
 import { packages, createTopUp, topUpStatus, handleStripeWebhook, verifyStripeAccount } from './stripe.js';
 
+const releaseVersion = process.env.PRIDE_RELEASE_VERSION || '0.3.8';
+
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
@@ -26,7 +28,7 @@ app.post('/v1/stripe/webhook', express.raw({ type: 'application/json', limit: '1
 app.use(express.json({ limit: '128kb' }));
 
 app.get('/healthz', async (_req,res,next) => {
-  try { await pool.query('SELECT 1'); res.json({ ok:true, version:'0.3.6', payments:config.stripeMode }); } catch(e) { next(e); }
+  try { await pool.query('SELECT 1'); res.json({ ok:true, version:releaseVersion, payments:config.stripeMode }); } catch(e) { next(e); }
 });
 app.get('/v1/config', (_req,res) => res.json({ iosBlocksPurchaseRail: config.iosBlocksPurchaseRail, merchant: config.expectedBusinessName }));
 app.post('/v1/auth/register', async (req,res,next) => { try { res.status(201).json(await register(req.body || {})); } catch(e) { next(e); } });
@@ -48,7 +50,7 @@ app.use((error, _req, res, _next) => {
 const server = app.listen(config.port, '127.0.0.1', async () => {
   try {
     const stripeAccount = await verifyStripeAccount();
-    console.log(`Pride Blocks API v0.3.6 listening on 127.0.0.1:${config.port}; Stripe ${stripeAccount.id}; ${config.stripeMode}`);
+    console.log(`Pride Blocks API v${releaseVersion} listening on 127.0.0.1:${config.port}; Stripe ${stripeAccount.id}; ${config.stripeMode}`);
   } catch (error) {
     console.error('Startup safety check failed:', error);
     server.close(() => process.exit(1));

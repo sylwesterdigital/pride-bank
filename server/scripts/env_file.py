@@ -11,8 +11,8 @@ KEY_RE = re.compile(r'^[A-Z][A-Z0-9_]*$')
 ALLOWED_KEYS = {
     'NODE_ENV','PORT','DATABASE_URL','DATABASE_SSL','SESSION_PEPPER',
     'STRIPE_SECRET_KEY','STRIPE_PUBLISHABLE_KEY','STRIPE_WEBHOOK_SECRET',
-    'STRIPE_WEBHOOK_ID','STRIPE_MODE','STRIPE_EXPECTED_BUSINESS_NAME',
-    'PUBLIC_BASE_URL','IOS_BLOCKS_PURCHASE_RAIL'
+    'STRIPE_WEBHOOK_ID','STRIPE_ACCOUNT_ID','STRIPE_MODE','STRIPE_EXPECTED_BUSINESS_NAME',
+    'PUBLIC_BASE_URL','IOS_BLOCKS_PURCHASE_RAIL','PRIDE_RELEASE_VERSION'
 }
 REQUIRED_KEYS = {
     'NODE_ENV','PORT','DATABASE_URL','DATABASE_SSL','SESSION_PEPPER',
@@ -118,6 +118,10 @@ def validate_semantics(data: dict[str,str]) -> None:
     if whsec != 'CHANGE_ME' and not re.fullmatch(r'whsec_[A-Za-z0-9_]+', whsec): fail('invalid Stripe webhook signing secret')
     wid=data.get('STRIPE_WEBHOOK_ID','CHANGE_ME')
     if wid != 'CHANGE_ME' and not re.fullmatch(r'we_[A-Za-z0-9_]+', wid): fail('invalid Stripe webhook endpoint id')
+    acct=data.get('STRIPE_ACCOUNT_ID','CHANGE_ME')
+    if acct != 'CHANGE_ME' and not re.fullmatch(r'acct_[A-Za-z0-9_]+', acct): fail('invalid Stripe account id')
+    rv=data.get('PRIDE_RELEASE_VERSION','')
+    if rv and not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', rv): fail('invalid Pride release version')
     base=data['PUBLIC_BASE_URL']
     if base != 'CHANGE_ME' and not re.fullmatch(r'https://[^\s?#]+(?:/[^\s?#]*)?', base): fail('PUBLIC_BASE_URL must be HTTPS or CHANGE_ME')
     if data['STRIPE_EXPECTED_BUSINESS_NAME'] != 'WORKWORK.FUN LTD': fail('unexpected Stripe business name')

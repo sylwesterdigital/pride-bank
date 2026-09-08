@@ -12,7 +12,7 @@ trap 'rm -rf "$TMP"' EXIT
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { pb_error "Invalid VERSION: $VERSION"; exit 1; }
 "$ROOT/scripts/verify_repo.sh"
 mkdir -p "$ARCHIVE_DIR" "$TMP/repo"
-rsync --archive --checksum --exclude='archive/' --exclude='.watch-state/' --exclude='build/' --exclude='.git/' --exclude='.DS_Store' --exclude='xcuserdata/' --exclude='*.xcuserstate' --exclude='.env' --exclude='.env.*' "$ROOT/" "$TMP/repo/"
+rsync --archive --checksum --exclude='archive/' --exclude='.watch-state/' --exclude='build/' --exclude='.git/' --exclude='.DS_Store' --exclude='xcuserdata/' --exclude='*.xcuserstate' --exclude='.env' --exclude='.env.*' --exclude='__pycache__/' --exclude='*.pyc' "$ROOT/" "$TMP/repo/"
 rm -f "$OUT"
 ( cd "$TMP/repo" && /usr/bin/zip -qry "$OUT" . )
 pb_success "Release source package created"
