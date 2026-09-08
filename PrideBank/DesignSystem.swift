@@ -16,21 +16,13 @@ struct BlockMark: View {
     var size: CGFloat = 52
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
-                .fill(.white)
-                .frame(width: size, height: size)
-                .rotationEffect(.degrees(45))
-            RoundedRectangle(cornerRadius: size * 0.12, style: .continuous)
-                .fill(Color.black.opacity(0.84))
-                .frame(width: size * 0.42, height: size * 0.42)
-                .rotationEffect(.degrees(45))
-        }
-        .frame(width: size * 1.25, height: size * 1.25)
-        .accessibilityHidden(true)
+        Image("PrideBrand")
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
+            .accessibilityLabel("Pride")
     }
 }
-
 struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

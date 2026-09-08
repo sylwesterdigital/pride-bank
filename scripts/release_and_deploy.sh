@@ -25,7 +25,7 @@ log "Repository verification"
 source ./scripts/release_profile.sh
 pb_load_release_profile
 network_retry ssh -o BatchMode=yes -o ConnectTimeout=12 -p "$PB_REMOTE_PORT" "$PB_REMOTE_USER@$PB_REMOTE_HOST" true || fail "Server SSH access failed after retries."
-log "Building mobile app"
+log "Building / deploying mobile app"
 ./scripts/app_build.sh
 log "Committing release source"
 git add -A

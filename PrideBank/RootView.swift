@@ -337,7 +337,8 @@ private struct HomeView: View {
     }
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 11) {
+            BlockMark(size: 34)
             VStack(alignment: .leading, spacing: 3) {
                 Text("Good evening")
                     .font(.system(size: 14, design: .rounded))
